@@ -60,6 +60,7 @@ secrets.env
 # Data directories (contain databases)
 backend/data/
 IResearcher-v5/data/
+business_data/
 
 # IDE and editors
 .vscode/
