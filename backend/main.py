@@ -105,9 +105,12 @@ async def chat(input_data: ChatInput):
     # Create thread if new
     if is_new_thread:
         try:
+            # Generate title from user query
+            title = frontend_store.generate_title_from_query(input_data.query)
             await frontend_store.create_thread(
                 thread_id=thread_id,
-                user_id=input_data.user_id
+                user_id=input_data.user_id,
+                title=title
             )
         except Exception as e:
             logger.warning(f"Error creating thread: {e}")
@@ -116,9 +119,9 @@ async def chat(input_data: ChatInput):
     try:
         await frontend_store.add_message(
             thread_id=thread_id,
-            message_type="user",
+            role="user",
             content=input_data.query,
-            role="user"
+            user_id=input_data.user_id
         )
     except Exception as e:
         logger.warning(f"Error saving user message: {e}")
@@ -173,9 +176,9 @@ async def chat(input_data: ChatInput):
                     try:
                         await frontend_store.add_message(
                             thread_id=thread_id,
-                            message_type="assistant",
-                            content=chunk.get("content", ""),
                             role="assistant",
+                            content=chunk.get("content", ""),
+                            user_id=input_data.user_id,
                             tool_events=tool_events if tool_events else None
                         )
                     except Exception as e:
@@ -325,8 +328,7 @@ async def get_thread_messages(
             MessageResponse(
                 id=msg["id"],
                 thread_id=msg["thread_id"],
-                message_type=msg["message_type"],
-                role=msg.get("role"),
+                role=msg["role"],
                 content=msg["content"],
                 created_at=datetime.fromisoformat(msg["created_at"]),
                 tool_events=msg.get("tool_events")
