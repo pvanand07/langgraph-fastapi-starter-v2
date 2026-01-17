@@ -2,6 +2,8 @@
 
 from typing import Optional, AsyncIterator, Dict, Any
 from datetime import datetime
+import json
+import logging
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
@@ -10,6 +12,9 @@ from config import DEFAULT_MODEL_CONFIG
 from memory_store import get_memory
 from tools import get_tools
 
+# Configure logger
+# Get logger - will use root logger configuration from basicConfig in main.py
+logger = logging.getLogger(__name__)
 
 def create_model(model_id: Optional[str] = None) -> ChatOpenAI:
     """Create a ChatOpenAI model with optional model_id override (matching IResearcher-v5 pattern)."""
@@ -93,55 +98,101 @@ class ChatServer:
         }
         
         # Stream agent response
-        full_response = ""
+        logger.info(f"Starting to stream response for thread_id: {thread_id}")
         async for event in agent.astream(
             {"messages": [HumanMessage(content=message)]},
             config,
             stream_mode=["messages", "updates"],
             subgraphs=False,
         ):
+            logger.debug(f"Event received: {event[0]}")
             # Handle message events
-            if event[0] == "messages" and event[1]:
+            if event[0] == "messages" and event[1][0].content:
                 msg = event[1][0]
-                if isinstance(msg, AIMessage) and msg.content:
-                    content = msg.content
-                    yield {
-                        "type": "chunk",
-                        "content": content
-                    }
-                    full_response += content
+                metadata = event[1][1]
+                if isinstance(msg, AIMessage):
+                    # Only yield chunks not from tools node
+                    if metadata.get("langgraph_node") != "tools":
+                        yield {
+                            "type": "chunk",
+                            "content": msg.content
+                        }
                 elif isinstance(msg, ToolMessage):
                     yield {
                         "type": "tool_end",
-                        "name": getattr(msg, 'name', 'unknown'),
-                        "output": str(msg.content)
+                        "name": msg.name,
+                        "output": msg.content,
+                        "artifacts_data": getattr(msg, 'artifact', None)
                     }
             
             # Handle updates for tool calls and final responses
             elif event[0] == "updates" and event[1]:
-                update = event[1]
-                if isinstance(update, dict):
-                    # Check for agent updates with tool calls
-                    if "agent" in update:
-                        agent_update = update["agent"]
-                        if isinstance(agent_update, dict):
-                            messages = agent_update.get("messages", [])
+                logger.debug(f"Updates event received: {type(event[1])}")
+                if isinstance(event[1], dict):
+                    logger.debug(f"Updates keys: {list(event[1].keys())}")
+                    # Iterate over update sources (e.g., "model", "tools")
+                    for source, update in event[1].items():
+                        if source == "model" and isinstance(update, dict):
+                            messages = update.get("messages", [])
                             if messages:
-                                for msg in messages:
-                                    if isinstance(msg, AIMessage):
-                                        # Check for tool calls
-                                        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                                            for tool_call in msg.tool_calls:
+                                msg = messages[0]
+                                logger.debug(f"Model update message type: {type(msg)}")
+                                if isinstance(msg, AIMessage):
+                                    # Check for tool_calls in the message
+                                    # Tool calls can be in tool_calls attribute or additional_kwargs
+                                    tool_calls = getattr(msg, 'tool_calls', [])
+                                    if not tool_calls:
+                                        tool_calls = msg.additional_kwargs.get('tool_calls', [])
+                                    
+                                    if tool_calls:
+                                        # Tool start event - emit for each tool call
+                                        for call in tool_calls:
+                                            tool_name = None
+                                            tool_input = None
+                                            
+                                            # Handle ToolCall objects (from langchain_core.messages)
+                                            if hasattr(call, 'name'):
+                                                tool_name = call.name
+                                                tool_input = getattr(call, 'args', None) or getattr(call, 'arguments', None)
+                                            # Handle dict format
+                                            elif isinstance(call, dict):
+                                                if 'function' in call:
+                                                    # Format: {'function': {'name': '...', 'arguments': '...'}, ...}
+                                                    func_dict = call.get('function', {})
+                                                    tool_name = func_dict.get('name')
+                                                    tool_input = func_dict.get('arguments')
+                                                    # Parse JSON string if needed
+                                                    if isinstance(tool_input, str):
+                                                        try:
+                                                            tool_input = json.loads(tool_input)
+                                                        except (json.JSONDecodeError, ValueError):
+                                                            pass
+                                                else:
+                                                    # Format: {'name': '...', 'args': {...}, ...}
+                                                    tool_name = call.get('name')
+                                                    tool_input = call.get('args') or call.get('arguments')
+                                            
+                                            if tool_name:
                                                 yield {
                                                     "type": "tool_start",
-                                                    "name": tool_call.get("name", "unknown"),
-                                                    "input": tool_call.get("args", {})
+                                                    "name": tool_name,
+                                                    "input": tool_input
                                                 }
-                                        # Final response
-                                        if msg.content:
-                                            yield {
-                                                "type": "full_response",
-                                                "content": msg.content
-                                            }
-                                            full_response = msg.content
+                                    
+                                    # Full response event (only if there's content or it's the final message)
+                                    if msg.content or not tool_calls:
+                                        usage_metadata = getattr(msg, 'usage_metadata', {})
+                                        full_response_data = {
+                                            "type": "full_response",
+                                            "content": msg.content,
+                                            "usage_metadata": usage_metadata
+                                        }
+                                        yield full_response_data
+                        
+                        elif source == "tools" and isinstance(update, dict):
+                            # Tool execution results are already handled in messages stream
+                            # But we can log them here for debugging
+                            messages = update.get("messages", [])
+                            if messages:
+                                logger.debug(f"Tools update: {len(messages)} message(s)")
 

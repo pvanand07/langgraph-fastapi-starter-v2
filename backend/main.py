@@ -1,39 +1,70 @@
 """FastAPI entrypoint for the chatbot backend."""
 
-import os
 import uuid
 import json
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 import dotenv
 import logging
 
 # Load environment variables FIRST before importing config
 dotenv.load_dotenv("secrets.env")
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
 from sse_starlette.sse import EventSourceResponse
 
-from config import HOST, PORT
+from config import HOST, PORT, DEBUG
 from models import (
-    ChatInput, ChatChunk, ThreadListResponse, ThreadResponse,
+    ChatInput, ThreadListResponse, ThreadResponse,
     MessageListResponse, MessageResponse, DocumentListResponse,
     DocumentResponse, UploadResponse, HealthResponse
 )
 from server import ChatServer
 from memory_store import initialize_database
 import document_store
+import frontend_store
 
 
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_level = logging.DEBUG if DEBUG else logging.INFO
+logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
+# Global server instance
+chat_server: Optional[ChatServer] = None
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    global chat_server
+    
+    # Startup
+    # Initialize document store tables
+    document_store.create_tables()
+    logger.info("✅ Document store initialized")
+    
+    # Initialize memory store (matching IResearcher-v5 pattern)
+    await initialize_database()
+    
+    # Initialize frontend store
+    await frontend_store.initialize_database()
+    logger.info("✅ Frontend store initialized")
+    
+    # Initialize chat server
+    chat_server = ChatServer()
+    logger.info("✅ Chat server initialized")
+    
+    yield
+    
+    # Shutdown (if needed in the future)
+
+
 # Initialize FastAPI app
-app = FastAPI(title="LangGraph Chatbot API")
+app = FastAPI(title="LangGraph Chatbot API", lifespan=lifespan)
 
 # CORS middleware
 app.add_middleware(
@@ -43,26 +74,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Global server instance
-chat_server: Optional[ChatServer] = None
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup."""
-    global chat_server
-    
-    # Initialize document store tables
-    document_store.create_tables()
-    logger.info("✅ Document store initialized")
-    
-    # Initialize memory store (matching IResearcher-v5 pattern)
-    await initialize_database()
-    
-    # Initialize chat server
-    chat_server = ChatServer()
-    logger.info("✅ Chat server initialized")
 
 
 @app.post("/api/v1/chat")
@@ -83,6 +94,34 @@ async def chat(input_data: ChatInput):
     
     # Generate thread_id if not provided
     thread_id = input_data.thread_id or str(uuid.uuid4())
+    is_new_thread = input_data.thread_id is None
+    
+    # Create or update user in frontend store
+    try:
+        await frontend_store.create_or_update_user(input_data.user_id)
+    except Exception as e:
+        logger.warning(f"Error creating/updating user: {e}")
+    
+    # Create thread if new
+    if is_new_thread:
+        try:
+            await frontend_store.create_thread(
+                thread_id=thread_id,
+                user_id=input_data.user_id
+            )
+        except Exception as e:
+            logger.warning(f"Error creating thread: {e}")
+    
+    # Save user message to frontend store
+    try:
+        await frontend_store.add_message(
+            thread_id=thread_id,
+            message_type="user",
+            content=input_data.query,
+            role="user"
+        )
+    except Exception as e:
+        logger.warning(f"Error saving user message: {e}")
     
     # Get document context if user has documents
     context = ""
@@ -100,6 +139,9 @@ async def chat(input_data: ChatInput):
     
     async def generate():
         """Generate streaming response."""
+        # Collect tool events during streaming
+        tool_events = []
+        
         try:
             async for chunk in chat_server.process_message(
                 message=input_data.query,
@@ -108,7 +150,37 @@ async def chat(input_data: ChatInput):
                 model_id=input_data.model_id,
                 context=context
             ):
+                # Stream chunk to frontend
                 yield json.dumps(chunk) + "\n"
+                
+                # Collect tool events
+                if chunk.get("type") == "tool_start":
+                    tool_events.append({
+                        "type": "tool_start",
+                        "name": chunk.get("name", "unknown"),
+                        "input": chunk.get("input", {})
+                    })
+                    
+                elif chunk.get("type") == "tool_end":
+                    tool_events.append({
+                        "type": "tool_end",
+                        "name": chunk.get("name", "unknown"),
+                        "output": chunk.get("output", "")
+                    })
+                    
+                elif chunk.get("type") == "full_response":
+                    # Save assistant message with all tool events at once
+                    try:
+                        await frontend_store.add_message(
+                            thread_id=thread_id,
+                            message_type="assistant",
+                            content=chunk.get("content", ""),
+                            role="assistant",
+                            tool_events=tool_events if tool_events else None
+                        )
+                    except Exception as e:
+                        logger.warning(f"Error saving assistant message: {e}")
+                    
         except Exception as e:
             logger.error(f"Error in chat stream: {e}")
             yield json.dumps({
@@ -192,54 +264,104 @@ async def upload_file(
 
 @app.get("/api/v1/threads", response_model=ThreadListResponse)
 async def list_threads(
-    user_id: str = Query(..., description="User ID"),  # noqa: ARG001
-    limit: int = Query(20, ge=1, le=100, description="Number of threads to return"),  # noqa: ARG001
-    after: Optional[str] = Query(None, description="Cursor for pagination"),  # noqa: ARG001
-    order: str = Query("desc", regex="^(asc|desc)$", description="Sort order")  # noqa: ARG001
+    user_id: str = Query(..., description="User ID"),
+    limit: int = Query(20, ge=1, le=100, description="Number of threads to return"),
+    after: Optional[str] = Query(None, description="Cursor for pagination"),
+    order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order")
 ):
     """List conversation threads for a user with pagination."""
-    # Note: Thread listing functionality skipped per user request
-    # In production, you would query the checkpoints table directly
-    return ThreadListResponse(
-        threads=[],
-        has_more=False,
-        after=None
-    )
+    try:
+        result = await frontend_store.list_threads(
+            user_id=user_id,
+            limit=limit,
+            after=after,
+            order=order
+        )
+        
+        # Convert to response model
+        threads = [
+            ThreadResponse(
+                id=thread["id"],
+                user_id=thread["user_id"],
+                title=thread.get("title"),
+                created_at=datetime.fromisoformat(thread["created_at"]),
+                updated_at=datetime.fromisoformat(thread["updated_at"])
+            )
+            for thread in result["threads"]
+        ]
+        
+        return ThreadListResponse(
+            threads=threads,
+            has_more=result["has_more"],
+            after=result["after"]
+        )
+    except Exception as e:
+        logger.error(f"Error listing threads: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/v1/threads/{thread_id}/messages", response_model=MessageListResponse)
 async def get_thread_messages(
-    thread_id: str,  # noqa: ARG001
-    user_id: str = Query(..., description="User ID"),  # noqa: ARG001
-    limit: int = Query(50, ge=1, le=100, description="Number of messages to return"),  # noqa: ARG001
-    after: Optional[str] = Query(None, description="Cursor for pagination"),  # noqa: ARG001
-    order: str = Query("desc", regex="^(asc|desc)$", description="Sort order")  # noqa: ARG001
+    thread_id: str,
+    user_id: str = Query(..., description="User ID"),
+    limit: int = Query(50, ge=1, le=100, description="Number of messages to return"),
+    after: Optional[str] = Query(None, description="Cursor for pagination"),
+    order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order")
 ):
     """
     Get messages from a conversation thread with pagination.
-    
-    Note: This is a simplified implementation. In production, you'd want
-    to extract messages from LangGraph checkpoints or maintain a separate
-    messages table for better querying.
     """
-    # For now, return empty list as LangGraph checkpoints don't expose
-    # a simple message history API. In production, you'd want to:
-    # 1. Store messages separately in a messages table, or
-    # 2. Extract messages from checkpoint state
-    
-    return MessageListResponse(
-        messages=[],
-        has_more=False,
-        after=None
-    )
+    try:
+        result = await frontend_store.get_messages(
+            thread_id=thread_id,
+            user_id=user_id,
+            limit=limit,
+            after=after,
+            order=order
+        )
+        
+        # Convert to response model
+        messages = [
+            MessageResponse(
+                id=msg["id"],
+                thread_id=msg["thread_id"],
+                message_type=msg["message_type"],
+                role=msg.get("role"),
+                content=msg["content"],
+                created_at=datetime.fromisoformat(msg["created_at"]),
+                tool_events=msg.get("tool_events")
+            )
+            for msg in result["messages"]
+        ]
+        
+        return MessageListResponse(
+            messages=messages,
+            has_more=result["has_more"],
+            after=result["after"]
+        )
+    except frontend_store.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting thread messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/v1/threads/{thread_id}")
-async def delete_thread(thread_id: str, user_id: str = Query(..., description="User ID")):  # noqa: ARG001
-    """Delete a conversation thread."""
-    # Note: Thread deletion functionality skipped per user request
-    # In production, you would delete checkpoints for the thread_id
-    return {"message": "Thread deletion not implemented"}
+async def delete_thread(thread_id: str, user_id: str = Query(..., description="User ID")):
+    """Delete a conversation thread from both stores."""
+    try:
+        # Delete from frontend store
+        await frontend_store.delete_thread(thread_id, user_id)
+        
+        # Note: Also delete from LangGraph checkpoints if needed
+        # This would require implementing checkpoint deletion in memory_store
+        
+        return {"message": f"Thread {thread_id} deleted successfully"}
+    except frontend_store.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting thread: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/v1/documents", response_model=DocumentListResponse)
@@ -293,5 +415,22 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=PORT)
+    log_level = "debug" if DEBUG else "info"
+    
+    # When reload is enabled, use import string format
+    if DEBUG:
+        uvicorn.run(
+            "main:app",  # Import string format for reload
+            host=HOST, 
+            port=PORT,
+            log_level=log_level,
+            reload=True  # Auto-reload on code changes in debug mode
+        )
+    else:
+        uvicorn.run(
+            app,  # Direct app object when reload is disabled
+            host=HOST, 
+            port=PORT,
+            log_level=log_level
+        )
 

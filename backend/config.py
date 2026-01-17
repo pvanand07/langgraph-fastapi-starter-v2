@@ -22,6 +22,7 @@ DATA_DIR = Path("./data/chatbot")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONVERSATIONS_DB_PATH = str(DATA_DIR / "conversations.db")
 DOCUMENTS_DB_PATH = str(DATA_DIR / "documents.db")
+FRONTEND_STORE_DB_PATH = str(DATA_DIR / "frontend_store.db")
 
 # Conversation settings
 MAX_RECENT_ITEMS = 50  # Maximum messages to load per conversation
@@ -29,4 +30,5 @@ MAX_RECENT_ITEMS = 50  # Maximum messages to load per conversation
 # Server settings
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 

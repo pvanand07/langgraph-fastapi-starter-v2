@@ -42,10 +42,11 @@ class MessageResponse(BaseModel):
     """Message response model."""
     id: str
     thread_id: str
-    role: Literal["user", "assistant", "tool"]
+    message_type: Literal["user", "assistant"]
+    role: Optional[Literal["user", "assistant"]] = None
     content: str
     created_at: datetime
-    tool_name: Optional[str] = None
+    tool_events: Optional[List[dict]] = None
 
 
 class MessageListResponse(BaseModel):
