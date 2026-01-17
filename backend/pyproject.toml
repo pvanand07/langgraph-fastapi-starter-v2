@@ -1,0 +1,24 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "fastapi[standard]>=0.128.0",
+    "httpx>=0.28.1",
+    "langchain-core==0.3.74",
+    "langchain-openai==0.3.31",
+    "langgraph==0.6.6",
+    "langgraph-checkpoint-sqlite==2.0.11",
+    "openai>=1.109.1",
+    "pydantic>=2.12.5",
+    "pymupdf==1.26.3",
+    "pymupdf4llm==0.0.27",
+    "python-dotenv>=1.2.1",
+    "sqlalchemy>=2.0.45",
+    "sse-starlette>=3.1.2",
+    "tiktoken>=0.12.0",
+    "uvicorn[standard]>=0.40.0",
+]

@@ -1,0 +1,33 @@
+# Core LangChain dependencies
+langchain-core==0.3.74
+langchain-openai==0.3.31
+langgraph==0.6.6
+langgraph-checkpoint-sqlite==2.0.11
+openai
+
+# FastAPI and server dependencies
+fastapi[standard]
+uvicorn[standard]
+sse-starlette
+
+# Environment and configuration
+python-dotenv
+
+# HTTP client for API calls
+httpx
+
+# Token counting
+tiktoken
+
+# Database
+aiosqlite
+sqlalchemy
+
+# PDF parsing
+pymupdf4llm==0.0.27
+pymupdf==1.26.3
+
+# Data validation
+pydantic
+
+
