@@ -1,20 +1,14 @@
-"""Chat server implementation with LangGraph agent."""
+"""Chat server implementation with LangChain agent."""
 
 from typing import Optional, AsyncIterator, Dict, Any
 from datetime import datetime
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, AnyMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
-from langgraph.prebuilt.chat_agent_executor import AgentState
+from langchain.agents import create_agent
 
 from config import DEFAULT_MODEL_CONFIG
 from memory_store import get_memory
 from tools import get_tools
-
-
-class CustomState(AgentState):
-    """Custom agent state with optional context."""
-    context: str = ""
 
 
 def create_model(model_id: Optional[str] = None) -> ChatOpenAI:
@@ -25,7 +19,7 @@ def create_model(model_id: Optional[str] = None) -> ChatOpenAI:
     return ChatOpenAI(**config)
 
 
-def create_prompt(context: str = "") -> str:
+def create_system_prompt(context: str = "") -> str:
     """Create system prompt for the agent."""
     today_date = datetime.now().strftime("%B %d, %Y")
     
@@ -44,35 +38,24 @@ Be concise, helpful, and accurate in your responses."""
     return base_prompt
 
 
-def agent_prompt(state: CustomState) -> list[AnyMessage]:
-    """Custom prompt function for the agent."""
-    context = state.get("context", "")
-    system_msg = SystemMessage(content=create_prompt(context))
-    
-    # Filter out existing system messages from history
-    messages = [m for m in state["messages"] if not isinstance(m, SystemMessage)]
-    
-    return [system_msg] + messages
-
-
 class ChatServer:
-    """Chat server managing LangGraph agent lifecycle."""
+    """Chat server managing LangChain agent lifecycle."""
     
     def __init__(self):
         """Initialize the chat server."""
         self.tools = get_tools()
+        self.checkpointer = get_memory()
     
-    async def get_agent(self, model_id: Optional[str] = None) -> Any:
-        """Get or create a LangGraph agent instance."""
+    def get_agent(self, model_id: Optional[str] = None, context: str = "") -> Any:
+        """Get or create a LangChain agent instance."""
         model = create_model(model_id)
-        checkpointer = get_memory()
+        system_prompt = create_system_prompt(context)
         
-        agent = create_react_agent(
+        agent = create_agent(
             model,
             tools=self.tools,
-            checkpointer=checkpointer,
-            state_schema=CustomState,
-            prompt=agent_prompt
+            checkpointer=self.checkpointer,
+            system_prompt=system_prompt
         )
         
         return agent
@@ -98,13 +81,8 @@ class ChatServer:
         Yields:
             Dictionary with response chunks
         """
-        agent = await self.get_agent(model_id)
-        
-        # Prepare agent input
-        agent_input = {
-            "messages": [HumanMessage(content=message)],
-            "context": context
-        }
+        # Create agent with context (context is included in system prompt)
+        agent = self.get_agent(model_id, context)
         
         # Prepare config with thread_id and user_id
         config = {
@@ -117,7 +95,7 @@ class ChatServer:
         # Stream agent response
         full_response = ""
         async for event in agent.astream(
-            agent_input,
+            {"messages": [HumanMessage(content=message)]},
             config,
             stream_mode=["messages", "updates"],
             subgraphs=False,
