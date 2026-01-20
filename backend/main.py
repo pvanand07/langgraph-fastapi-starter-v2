@@ -19,8 +19,7 @@ from config import HOST, PORT, DEBUG
 from models import (
     ChatInput, ThreadListResponse, ThreadResponse,
     MessageListResponse, MessageResponse, DocumentListResponse,
-    DocumentResponse, UploadResponse, HealthResponse, ExcelUploadResponse,
-    HITLResumeInput
+    DocumentResponse, UploadResponse, HealthResponse, ExcelUploadResponse
 )
 from server import ChatServer
 from memory_store import initialize_database
@@ -216,116 +215,6 @@ async def chat(input_data: ChatInput):
                     
         except Exception as e:
             logger.error(f"Error in chat stream: {e}")
-            yield json.dumps({
-                "type": "error",
-                "content": f"Error: {str(e)}"
-            }) + "\n"
-    
-    return EventSourceResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-    )
-
-
-@app.post("/api/v1/chat/resume")
-async def resume_chat(input_data: HITLResumeInput):
-    """
-    Resume chat execution after a human-in-the-loop interrupt.
-    
-    This endpoint is called when the user provides a decision for an interrupt
-    (e.g., answering a question from the ask_question tool).
-    """
-    global chat_server
-    
-    if not chat_server:
-        raise HTTPException(status_code=503, detail="Chat server not initialized")
-    
-    # Build context (same as chat endpoint)
-    context_parts = []
-    
-    # Get document context if user has documents
-    try:
-        user_docs = document_store.list_documents(input_data.user_id)
-        if user_docs:
-            doc_ids = [doc["doc_id"] for doc in user_docs]
-            doc_context = document_store.get_document_context(
-                user_id=input_data.user_id,
-                doc_ids=doc_ids,
-                max_tokens=1000
-            )
-            if doc_context:
-                context_parts.append("=== DOCUMENT CONTEXT ===")
-                context_parts.append(doc_context)
-    except Exception as e:
-        logger.warning(f"Error loading document context: {e}")
-    
-    # Get data loader context
-    try:
-        metadata_csv = data_loader.get_metadata_csv(user_id=input_data.user_id, session_id=input_data.thread_id)
-        if metadata_csv:
-            context_parts.append("\n=== AVAILABLE DATA TABLES (METADATA) ===")
-            context_parts.append(metadata_csv)
-        
-        schema_markdown = data_loader.get_tables_by_schema_csv(user_id=input_data.user_id)
-        if schema_markdown:
-            context_parts.append("\n=== DATA TABLE SCHEMAS ===")
-            context_parts.append(schema_markdown)
-    except Exception as e:
-        logger.warning(f"Error loading data loader context: {e}")
-    
-    context = "\n".join(context_parts) if context_parts else ""
-    
-    async def generate():
-        """Generate streaming response after resume."""
-        tool_events = []
-        
-        try:
-            # Convert decisions to dict format
-            decisions = [decision.dict() for decision in input_data.decisions]
-            
-            async for chunk in chat_server.resume_after_interrupt(
-                thread_id=input_data.thread_id,
-                user_id=input_data.user_id,
-                decisions=decisions,
-                context=context
-            ):
-                # Stream chunk to frontend
-                yield json.dumps(chunk) + "\n"
-                
-                # Collect tool events
-                if chunk.get("type") == "tool_start":
-                    tool_events.append({
-                        "type": "tool_start",
-                        "name": chunk.get("name", "unknown"),
-                        "input": chunk.get("input", {})
-                    })
-                    
-                elif chunk.get("type") == "tool_end":
-                    tool_events.append({
-                        "type": "tool_end",
-                        "name": chunk.get("name", "unknown"),
-                        "output": chunk.get("output", "")
-                    })
-                    
-                elif chunk.get("type") == "full_response":
-                    # Save assistant message
-                    try:
-                        await frontend_store.add_message(
-                            thread_id=input_data.thread_id,
-                            role="assistant",
-                            content=chunk.get("content", ""),
-                            user_id=input_data.user_id,
-                            tool_events=tool_events if tool_events else None
-                        )
-                    except Exception as e:
-                        logger.warning(f"Error saving assistant message: {e}")
-                    
-        except Exception as e:
-            logger.error(f"Error in resume stream: {e}")
             yield json.dumps({
                 "type": "error",
                 "content": f"Error: {str(e)}"
@@ -671,7 +560,6 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "chat": "POST /api/v1/chat - Chat with streaming responses",
-            "chat_resume": "POST /api/v1/chat/resume - Resume chat after human-in-the-loop interrupt",
             "upload": "POST /api/v1/upload - Upload PDF documents",
             "upload_excel": "POST /api/v1/upload-excel - Upload Excel (.xlsx) files to DuckDB",
             "metadata_csv": "GET /api/v1/metadata-csv - Get metadata table as CSV (filtered by user_id, session_id)",

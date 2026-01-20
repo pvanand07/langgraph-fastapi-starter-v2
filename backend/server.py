@@ -7,8 +7,6 @@ import logging
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langgraph.types import Command
 
 from config import DEFAULT_MODEL_CONFIG
 from memory_store import get_memory
@@ -38,7 +36,6 @@ You have access to the following tools:
 - search_documents: Search through user's uploaded documents
 - query_duckdb: Execute SQL queries against the user's data tables in DuckDB
 - create_view: Create persistent views in DuckDB
-- ask_question: Ask the user a question with multiple choice options (requires human response)
 
 You also have access to data tables stored in DuckDB. 
 
@@ -48,8 +45,6 @@ When users ask questions about their data:
 3. In case of missing information, ask the user for more information or suggest alternative approaches to get the information
 4. Use the query_duckdb tool to execute SQL queries to get specific data
 5. Reference the table names and schemas provided in the context to construct accurate queries
-
-When you need user input or confirmation, use the ask_question tool with appropriate options.
 
 Be helpful, and accurate in your responses.
 If you are not sure about the answer, say so and ask the user for more information."""
@@ -73,28 +68,12 @@ class ChatServer:
         model = create_model(model_id)
         system_prompt = create_system_prompt(context)
         
-        # Configure human-in-the-loop middleware for ask_question tool only
-        hitl_middleware = HumanInTheLoopMiddleware(
-            interrupt_on={
-                # ask_question requires human approval - allow all decision types
-                "ask_question": True,
-                # All other tools run without interruption
-                "calculator": False,
-                "get_current_time": False,
-                "search_documents": False,
-                "query_duckdb": False,
-                "create_view": False,
-            },
-            description_prefix="Question requires user response",
-        )
-        
         agent = create_agent(
             model,
             tools=self.tools,
             checkpointer=self.checkpointer,
             system_prompt=system_prompt,
-            context_schema=ChatContext,
-            middleware=[hitl_middleware]
+            context_schema=ChatContext
         )
         
         return agent
@@ -169,22 +148,6 @@ class ChatServer:
                 if isinstance(event[1], dict):
                     logger.debug(f"Updates keys: {list(event[1].keys())}")
                     
-                    # Check for interrupt in updates
-                    if "__interrupt__" in event[1]:
-                        interrupt_data = event[1]["__interrupt__"]
-                        logger.info(f"Interrupt detected: {interrupt_data}")
-                        
-                        # Extract interrupt details
-                        if interrupt_data and len(interrupt_data) > 0:
-                            interrupt_value = interrupt_data[0].value if hasattr(interrupt_data[0], 'value') else interrupt_data[0]
-                            
-                            yield {
-                                "type": "interrupt",
-                                "interrupt_data": interrupt_value
-                            }
-                            # Stop processing - wait for human decision
-                            return
-                    
                     # Iterate over update sources (e.g., "model", "tools")
                     for source, update in event[1].items():
                         if source == "model" and isinstance(update, dict):
@@ -250,117 +213,3 @@ class ChatServer:
                             messages = update.get("messages", [])
                             if messages:
                                 logger.debug(f"Tools update: {len(messages)} message(s)")
-    
-    async def resume_after_interrupt(
-        self,
-        thread_id: str,
-        user_id: str,
-        decisions: list,
-        model_id: Optional[str] = None,
-        context: str = ""
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """
-        Resume execution after a human-in-the-loop interrupt.
-        
-        Args:
-            thread_id: Conversation thread ID
-            user_id: User ID
-            decisions: List of decision dictionaries
-            model_id: Optional model override
-            context: Optional context string
-        
-        Yields:
-            Dictionary with response chunks
-        """
-        # Create agent with same context
-        agent = self.get_agent(model_id, context)
-        
-        # Prepare config with thread_id and user_id
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "user_id": user_id
-            }
-        }
-        
-        # Create context for tools
-        context_obj = ChatContext(user_id=user_id, thread_id=thread_id)
-        
-        # Resume with Command object
-        logger.info(f"Resuming after interrupt for thread_id: {thread_id}")
-        async for event in agent.astream(
-            Command(resume={"decisions": decisions}),
-            config,
-            context=context_obj,
-            stream_mode=["messages", "updates"],
-            subgraphs=False,
-        ):
-            logger.debug(f"Resume event received: {event[0]}")
-            # Handle message events (same as process_message)
-            if event[0] == "messages" and event[1][0].content:
-                msg = event[1][0]
-                metadata = event[1][1]
-                if isinstance(msg, AIMessage):
-                    if metadata.get("langgraph_node") != "tools":
-                        yield {
-                            "type": "chunk",
-                            "content": msg.content
-                        }
-                elif isinstance(msg, ToolMessage):
-                    yield {
-                        "type": "tool_end",
-                        "name": msg.name,
-                        "output": msg.content,
-                        "artifacts_data": getattr(msg, 'artifact', None)
-                    }
-            
-            # Handle updates
-            elif event[0] == "updates" and event[1]:
-                if isinstance(event[1], dict):
-                    for source, update in event[1].items():
-                        if source == "model" and isinstance(update, dict):
-                            messages = update.get("messages", [])
-                            if messages:
-                                msg = messages[0]
-                                if isinstance(msg, AIMessage):
-                                    tool_calls = getattr(msg, 'tool_calls', [])
-                                    if not tool_calls:
-                                        tool_calls = msg.additional_kwargs.get('tool_calls', [])
-                                    
-                                    if tool_calls:
-                                        for call in tool_calls:
-                                            tool_name = None
-                                            tool_input = None
-                                            
-                                            if hasattr(call, 'name'):
-                                                tool_name = call.name
-                                                tool_input = getattr(call, 'args', None) or getattr(call, 'arguments', None)
-                                            elif isinstance(call, dict):
-                                                if 'function' in call:
-                                                    func_dict = call.get('function', {})
-                                                    tool_name = func_dict.get('name')
-                                                    tool_input = func_dict.get('arguments')
-                                                    if isinstance(tool_input, str):
-                                                        try:
-                                                            tool_input = json.loads(tool_input)
-                                                        except (json.JSONDecodeError, ValueError):
-                                                            pass
-                                                else:
-                                                    tool_name = call.get('name')
-                                                    tool_input = call.get('args') or call.get('arguments')
-                                            
-                                            if tool_name:
-                                                yield {
-                                                    "type": "tool_start",
-                                                    "name": tool_name,
-                                                    "input": tool_input
-                                                }
-                                    
-                                    if msg.content or not tool_calls:
-                                        usage_metadata = getattr(msg, 'usage_metadata', {})
-                                        yield {
-                                            "type": "full_response",
-                                            "content": msg.content,
-                                            "usage_metadata": usage_metadata
-                                        }
-

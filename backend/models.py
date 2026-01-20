@@ -15,12 +15,11 @@ class ChatInput(BaseModel):
 
 class ChatChunk(BaseModel):
     """Streaming chat response chunk."""
-    type: Literal["chunk", "tool_start", "tool_end", "full_response", "error", "interrupt"]
+    type: Literal["chunk", "tool_start", "tool_end", "full_response", "error"]
     content: Optional[str] = None
     name: Optional[str] = None
     input: Optional[dict] = None
     output: Optional[str] = None
-    interrupt_data: Optional[dict] = None  # For interrupt events
 
 
 class ThreadResponse(BaseModel):
@@ -99,25 +98,4 @@ class CSVResponse(BaseModel):
     """CSV data response."""
     csv_data: str
     content_type: str = "text/csv"
-
-
-class HITLDecision(BaseModel):
-    """Decision for a single human-in-the-loop action."""
-    type: Literal["approve", "edit", "reject"] = Field(..., description="Decision type")
-    edited_action: Optional[dict] = Field(None, description="Edited action (only for 'edit' type)")
-    message: Optional[str] = Field(None, description="Rejection message (only for 'reject' type)")
-
-
-class HITLResumeInput(BaseModel):
-    """Input model for resuming after human-in-the-loop interrupt."""
-    thread_id: str = Field(..., description="Thread ID to resume")
-    user_id: str = Field(..., description="User ID")
-    decisions: List[HITLDecision] = Field(..., description="List of decisions for each action")
-
-
-class HITLInterruptData(BaseModel):
-    """Interrupt data sent to frontend when human input is needed."""
-    action_requests: List[dict] = Field(..., description="List of actions requiring review")
-    review_configs: List[dict] = Field(..., description="Configuration for each action")
-
 

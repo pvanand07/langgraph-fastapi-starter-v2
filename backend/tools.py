@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any
 from langchain.tools import tool, ToolRuntime
-from langgraph.types import interrupt
 import document_store
 import data_loader
 
@@ -314,69 +313,8 @@ async def create_view(
         return (error_msg, None)
 
 
-@tool(response_format="content_and_artifact")
-async def ask_question(
-    question: str,
-    options: List[str],
-    runtime: ToolRuntime[ChatContext]
-) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """
-    Ask a question to the user and wait for their response from a list of options.
-    
-    This tool implements human-in-the-loop by pausing execution and waiting for user input.
-    The user must select one of the provided options.
-    
-    Args:
-        question: The question to ask the user
-        options: List of possible answer options
-        runtime: ToolRuntime containing user context
-    
-    Returns:
-        Tuple of (content_string, artifacts_dict) with the question and options
-    
-    Examples:
-        - question: "Which report would you like to generate?", options: ["Sales Report", "Inventory Report", "Financial Report"]
-        - question: "Do you want to proceed with this action?", options: ["Yes", "No"]
-    """
-    writer = runtime.stream_writer
-    user_id = runtime.context.user_id
-    session_id = runtime.context.thread_id
-    
-    # Format the question with options
-    options_str = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(options)])
-    formatted_question = f"{question}\n\nOptions:\n{options_str}"
-    
-    writer(f"Asking user: {question}")
-    
-    # Use interrupt to pause execution and wait for human response
-    # The interrupt will be caught by the HumanInTheLoopMiddleware
-    response = interrupt(
-        {
-            "question": question,
-            "options": options,
-            "user_id": user_id,
-            "session_id": session_id,
-            "formatted_question": formatted_question
-        }
-    )
-    
-    # After resume, response will contain the user's answer
-    artifacts = {
-        "question": question,
-        "options": options,
-        "user_response": response,
-        "user_id": user_id,
-        "session_id": session_id
-    }
-    
-    content = f"User response to '{question}': {response}"
-    writer(content)
-    
-    return (content, artifacts)
-
-
 def get_tools() -> List:
     """Get all available tools."""
-    return [calculator, get_current_time, search_documents, query_duckdb, create_view, ask_question]
+    return [calculator, get_current_time, search_documents, query_duckdb, create_view]
 
  
