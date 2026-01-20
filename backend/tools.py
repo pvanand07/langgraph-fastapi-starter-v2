@@ -1,11 +1,22 @@
 """Minimal tool definitions for the chatbot agent."""
 
-import operator
+import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
-from langchain_core.tools import tool
-from langchain_core.runnables import RunnableConfig
+from typing import Optional, List, Tuple, Dict, Any
+from langchain.tools import tool, ToolRuntime
+from langgraph.types import interrupt
 import document_store
+import data_loader
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ChatContext:
+    """Context passed to tools containing user and session information."""
+    user_id: str
+    thread_id: str  # session_id is same as thread_id
 
 
 @tool
@@ -48,21 +59,34 @@ def get_current_time(timezone: Optional[str] = None) -> str:  # noqa: ARG001
     return now.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-@tool
-def search_documents(query: str, user_id: str, doc_ids: Optional[List[str]] = None, limit: int = 5, config: Optional[RunnableConfig] = None) -> str:  # noqa: ARG001
+@tool(response_format="content_and_artifact")
+async def search_documents(
+    query: str,
+    runtime: ToolRuntime[ChatContext],
+    doc_ids: Optional[List[str]] = None,
+    limit: int = 5
+) -> Tuple[str, Optional[Dict[str, Any]]]:
     """
     Search through uploaded documents for the user.
     
     Args:
         query: Search query string
-        user_id: User ID to scope the search
+        runtime: ToolRuntime containing user context
         doc_ids: Optional list of document IDs to search within
         limit: Maximum number of results to return (default: 5)
     
     Returns:
-        Formatted string with search results including document ID, page number, and content snippet.
+        Tuple of (content_string, artifacts_dict) with search results
     """
+    writer = runtime.stream_writer
+    user_id = runtime.context.user_id
+    session_id = runtime.context.thread_id
+    
+    writer(f"Searching documents for: {query[:100]}...")
+    
     try:
+        writer(f"Searching documents for user: {user_id}...")
+        
         results = document_store.search_documents(
             user_id=user_id,
             query=query,
@@ -71,21 +95,288 @@ def search_documents(query: str, user_id: str, doc_ids: Optional[List[str]] = No
         )
         
         if not results:
-            return f"No documents found matching '{query}'."
+            writer(f"No documents found matching '{query}'.")
+            return (f"No documents found matching '{query}'.", None)
         
         formatted_results = []
+        artifacts = {
+            "results": [],
+            "user_id": user_id,
+            "session_id": session_id,
+            "query": query
+        }
+        
         for result in results:
             formatted_results.append(
                 f"Document: {result['doc_id']}, Page {result['page_number']}\n"
                 f"Snippet: {result.get('snippet', result['content'][:200])}\n"
             )
+            
+            artifacts["results"].append({
+                "doc_id": result['doc_id'],
+                "page_number": result['page_number'],
+                "snippet": result.get('snippet', result['content'][:200])
+            })
         
-        return "\n---\n".join(formatted_results)
+        content = "\n---\n".join(formatted_results)
+        
+        writer(f"Found {len(artifacts['results'])} relevant document(s).")
+        
+        return (content, artifacts)
     except Exception as e:
-        return f"Error searching documents: {str(e)}"
+        error_msg = f"Error searching documents: {str(e)}"
+        logger.error(error_msg)
+        writer(error_msg)
+        return (error_msg, None)
+
+
+@tool(response_format="content_and_artifact")
+async def query_duckdb(
+    sql_query: str,
+    runtime: ToolRuntime[ChatContext],
+    limit: int = 100
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Execute a SQL query against DuckDB data tables.
+    
+    This tool allows you to query the user's data tables stored in DuckDB. The query will automatically
+    be scoped to tables accessible by the user_id (and optionally session_id from thread_id).
+    
+    Args:
+        sql_query: SQL query string to execute (e.g., "SELECT * FROM table_name LIMIT 10")
+        runtime: ToolRuntime containing user context
+        limit: Maximum number of rows to return (default: 100, applied as safety limit)
+    
+    Returns:
+        Tuple of (content_string, artifacts_dict) with query results.
+        Results are returned as CSV format for easy reading.
+    
+    Examples:
+        - "SELECT * FROM metadata WHERE user_id = 'user123'"
+        - "SELECT table_name, row_count FROM metadata LIMIT 5"
+        - "SELECT column_name, column_type FROM information_schema.columns WHERE table_name = 'my_table'"
+    """
+    writer = runtime.stream_writer
+    user_id = runtime.context.user_id
+    session_id = runtime.context.thread_id
+    
+    writer(f"Executing SQL query: {sql_query[:100]}...")
+    
+    try:
+        conn = data_loader.get_connection()
+        
+        # Get list of tables accessible by this user
+        metadata_query = "SELECT table_name FROM metadata WHERE user_id = ?"
+        metadata_params = [user_id]
+        
+        if session_id:
+            metadata_query += " AND session_id = ?"
+            metadata_params.append(session_id)
+        
+        try:
+            accessible_tables_df = conn.execute(metadata_query, metadata_params).fetchdf()
+            accessible_tables = set(accessible_tables_df['table_name'].tolist()) if not accessible_tables_df.empty else set()
+            # Also include the metadata table
+            accessible_tables.add('metadata')
+            
+            # Get accessible views for this user/session
+            accessible_views = data_loader.get_accessible_views(user_id, session_id)
+            accessible_tables.update(accessible_views)
+        except Exception:
+            accessible_tables = {'metadata'}  # Fallback to at least metadata table
+        
+        # Basic SQL injection prevention - check for dangerous keywords
+        dangerous_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE', 'EXEC', 'EXECUTE']
+        sql_upper = sql_query.upper()
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                error_msg = f"Error: SQL query contains forbidden keyword '{keyword}'. Only SELECT queries are allowed."
+                writer(error_msg)
+                return (error_msg, None)
+        
+        # Ensure it's a SELECT query
+        if not sql_query.strip().upper().startswith('SELECT'):
+            error_msg = "Error: Only SELECT queries are allowed."
+            writer(error_msg)
+            return (error_msg, None)
+        
+        writer("Executing query...")
+        
+        # Execute the query
+        try:
+            result_df = conn.execute(sql_query).fetchdf()
+        except Exception as e:
+            error_msg = f"Error executing SQL query: {str(e)}"
+            logger.error(error_msg)
+            writer(error_msg)
+            return (error_msg, None)
+        
+        if result_df.empty:
+            msg = "Query executed successfully but returned no results."
+            writer(msg)
+            return (msg, None)
+        
+        # Apply limit if result is too large
+        truncated = False
+        if len(result_df) > limit:
+            result_df = result_df.head(limit)
+            truncated = True
+        
+        # Convert to CSV string
+        csv_result = result_df.to_csv(index=False)
+        
+        # Format response
+        response = f"Query executed successfully. Returned {len(result_df)} row(s).\n\n"
+        if truncated:
+            response += f"Note: Results truncated to {limit} rows.\n\n"
+        response += "Results (CSV format):\n"
+        response += csv_result
+        
+        # Create artifacts
+        artifacts = {
+            "query": sql_query,
+            "user_id": user_id,
+            "session_id": session_id,
+            "row_count": len(result_df),
+            "truncated": truncated,
+            "accessible_tables": list(accessible_tables)
+        }
+        
+        writer(f"Query completed. Returned {len(result_df)} row(s).")
+        
+        return (response, artifacts)
+    except Exception as e:
+        error_msg = f"Error querying DuckDB: {str(e)}"
+        logger.error(error_msg)
+        writer(error_msg)
+        return (error_msg, None)
+
+
+@tool(response_format="content_and_artifact")
+async def create_view(
+    view_name: str,
+    view_definition: str,
+    runtime: ToolRuntime[ChatContext]
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Create a persistent view in DuckDB scoped to the current user and session.
+    
+    Views are stored in the database and can be queried like tables. They are automatically
+    scoped to the user_id and session_id, so users can only see and use their own views.
+    
+    Args:
+        view_name: Name for the view (alphanumeric and underscores only)
+        view_definition: SQL SELECT statement defining the view (e.g., "SELECT * FROM table_name WHERE column = 'value'")
+        runtime: ToolRuntime containing user context
+    
+    Returns:
+        Tuple of (content_string, artifacts_dict) with creation result
+    
+    Examples:
+        - view_name: "my_filtered_data", view_definition: "SELECT * FROM sales_data WHERE amount > 1000"
+        - view_name: "monthly_summary", view_definition: "SELECT month, SUM(revenue) FROM transactions GROUP BY month"
+    """
+    writer = runtime.stream_writer
+    user_id = runtime.context.user_id
+    session_id = runtime.context.thread_id
+    
+    writer(f"Creating view '{view_name}'...")
+    
+    try:
+        data_loader.create_view(
+            view_name=view_name,
+            view_definition=view_definition,
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        content = f"View '{view_name}' created successfully. You can now query it like a table using: SELECT * FROM {view_name}"
+        writer(content)
+        
+        artifacts = {
+            "view_name": view_name,
+            "user_id": user_id,
+            "session_id": session_id,
+            "view_definition": view_definition,
+            "success": True
+        }
+        
+        return (content, artifacts)
+    except ValueError as e:
+        error_msg = f"Error creating view: {str(e)}"
+        logger.error(error_msg)
+        writer(error_msg)
+        return (error_msg, None)
+    except Exception as e:
+        error_msg = f"Error creating view: {str(e)}"
+        logger.error(error_msg)
+        writer(error_msg)
+        return (error_msg, None)
+
+
+@tool(response_format="content_and_artifact")
+async def ask_question(
+    question: str,
+    options: List[str],
+    runtime: ToolRuntime[ChatContext]
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Ask a question to the user and wait for their response from a list of options.
+    
+    This tool implements human-in-the-loop by pausing execution and waiting for user input.
+    The user must select one of the provided options.
+    
+    Args:
+        question: The question to ask the user
+        options: List of possible answer options
+        runtime: ToolRuntime containing user context
+    
+    Returns:
+        Tuple of (content_string, artifacts_dict) with the question and options
+    
+    Examples:
+        - question: "Which report would you like to generate?", options: ["Sales Report", "Inventory Report", "Financial Report"]
+        - question: "Do you want to proceed with this action?", options: ["Yes", "No"]
+    """
+    writer = runtime.stream_writer
+    user_id = runtime.context.user_id
+    session_id = runtime.context.thread_id
+    
+    # Format the question with options
+    options_str = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(options)])
+    formatted_question = f"{question}\n\nOptions:\n{options_str}"
+    
+    writer(f"Asking user: {question}")
+    
+    # Use interrupt to pause execution and wait for human response
+    # The interrupt will be caught by the HumanInTheLoopMiddleware
+    response = interrupt(
+        {
+            "question": question,
+            "options": options,
+            "user_id": user_id,
+            "session_id": session_id,
+            "formatted_question": formatted_question
+        }
+    )
+    
+    # After resume, response will contain the user's answer
+    artifacts = {
+        "question": question,
+        "options": options,
+        "user_response": response,
+        "user_id": user_id,
+        "session_id": session_id
+    }
+    
+    content = f"User response to '{question}': {response}"
+    writer(content)
+    
+    return (content, artifacts)
 
 
 def get_tools() -> List:
     """Get all available tools."""
-    return [calculator, get_current_time, search_documents]
+    return [calculator, get_current_time, search_documents, query_duckdb, create_view, ask_question]
 
+ 

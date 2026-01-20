@@ -30,4 +30,11 @@ pymupdf==1.26.3
 # Data validation
 pydantic
 
+# Excel and data processing
+pandas
+openpyxl
+duckdb
+
+
+
 

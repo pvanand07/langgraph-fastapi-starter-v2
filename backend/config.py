@@ -5,7 +5,7 @@ from pathlib import Path
 
 # Default model configuration (matching IResearcher-v5 OpenRouter setup)
 DEFAULT_MODEL_CONFIG = {
-    "model": "openai/gpt-4.1",
+    "model": "openai/gpt-5.1",
     "streaming": True,
     "temperature": 0.1,
     "base_url": "https://openrouter.ai/api/v1",
@@ -23,6 +23,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONVERSATIONS_DB_PATH = str(DATA_DIR / "conversations.db")
 DOCUMENTS_DB_PATH = str(DATA_DIR / "documents.db")
 FRONTEND_STORE_DB_PATH = str(DATA_DIR / "frontend_store.db")
+DUCKDB_PATH = str(DATA_DIR / "data_warehouse.duckdb")
 
 # Conversation settings
 MAX_RECENT_ITEMS = 50  # Maximum messages to load per conversation
