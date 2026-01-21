@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
+from langgraph.types import Command
 
 from config import HOST, PORT, DEBUG
 from models import (
@@ -97,39 +98,48 @@ async def chat(input_data: ChatInput):
     if not chat_server:
         raise HTTPException(status_code=503, detail="Chat server not initialized")
     
-    # Generate thread_id if not provided
+    # Check if this is a resume command (human-in-the-loop response)
+    is_resume = input_data.resume_data is not None
+    
+    # Generate thread_id if not provided (for new conversations)
+    # For resume commands, thread_id must be provided
+    if is_resume and not input_data.thread_id:
+        raise HTTPException(status_code=400, detail="thread_id is required for resume commands")
+    
     thread_id = input_data.thread_id or str(uuid.uuid4())
-    is_new_thread = input_data.thread_id is None
+    is_new_thread = input_data.thread_id is None and not is_resume
     
-    # Create or update user in frontend store
-    try:
-        await frontend_store.create_or_update_user(input_data.user_id)
-    except Exception as e:
-        logger.warning(f"Error creating/updating user: {e}")
-    
-    # Create thread if new
-    if is_new_thread:
+    # Only do these operations for regular messages, not resume commands
+    if not is_resume:
+        # Create or update user in frontend store
         try:
-            # Generate title from user query
-            title = frontend_store.generate_title_from_query(input_data.query)
-            await frontend_store.create_thread(
+            await frontend_store.create_or_update_user(input_data.user_id)
+        except Exception as e:
+            logger.warning(f"Error creating/updating user: {e}")
+        
+        # Create thread if new
+        if is_new_thread:
+            try:
+                # Generate title from user query
+                title = frontend_store.generate_title_from_query(input_data.query)
+                await frontend_store.create_thread(
+                    thread_id=thread_id,
+                    user_id=input_data.user_id,
+                    title=title
+                )
+            except Exception as e:
+                logger.warning(f"Error creating thread: {e}")
+        
+        # Save user message to frontend store
+        try:
+            await frontend_store.add_message(
                 thread_id=thread_id,
-                user_id=input_data.user_id,
-                title=title
+                role="user",
+                content=input_data.query,
+                user_id=input_data.user_id
             )
         except Exception as e:
-            logger.warning(f"Error creating thread: {e}")
-    
-    # Save user message to frontend store
-    try:
-        await frontend_store.add_message(
-            thread_id=thread_id,
-            role="user",
-            content=input_data.query,
-            user_id=input_data.user_id
-        )
-    except Exception as e:
-        logger.warning(f"Error saving user message: {e}")
+            logger.warning(f"Error saving user message: {e}")
     
     # Build context from multiple sources
     context_parts = []
@@ -175,43 +185,85 @@ async def chat(input_data: ChatInput):
         tool_events = []
         
         try:
-            async for chunk in chat_server.process_message(
-                message=input_data.query,
-                thread_id=thread_id,
-                user_id=input_data.user_id,
-                model_id=input_data.model_id,
-                context=context
-            ):
-                # Stream chunk to frontend
-                yield json.dumps(chunk) + "\n"
-                
-                # Collect tool events
-                if chunk.get("type") == "tool_start":
-                    tool_events.append({
-                        "type": "tool_start",
-                        "name": chunk.get("name", "unknown"),
-                        "input": chunk.get("input", {})
-                    })
+            # Determine if this is a resume command or regular message
+            if is_resume:
+                # Handle resume command for human-in-the-loop
+                async for chunk in chat_server.process_resume(
+                    answers=input_data.resume_data.answers,
+                    thread_id=thread_id,
+                    user_id=input_data.user_id,
+                    model_id=input_data.model_id,
+                    context=context
+                ):
+                    # Stream chunk to frontend
+                    yield json.dumps(chunk) + "\n"
                     
-                elif chunk.get("type") == "tool_end":
-                    tool_events.append({
-                        "type": "tool_end",
-                        "name": chunk.get("name", "unknown"),
-                        "output": chunk.get("output", "")
-                    })
+                    # Collect tool events
+                    if chunk.get("type") == "tool_start":
+                        tool_events.append({
+                            "type": "tool_start",
+                            "name": chunk.get("name", "unknown"),
+                            "input": chunk.get("input", {})
+                        })
+                        
+                    elif chunk.get("type") == "tool_end":
+                        tool_events.append({
+                            "type": "tool_end",
+                            "name": chunk.get("name", "unknown"),
+                            "output": chunk.get("output", "")
+                        })
+                        
+                    elif chunk.get("type") == "full_response":
+                        # Save assistant message with all tool events at once
+                        try:
+                            await frontend_store.add_message(
+                                thread_id=thread_id,
+                                role="assistant",
+                                content=chunk.get("content", ""),
+                                user_id=input_data.user_id,
+                                tool_events=tool_events if tool_events else None
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error saving assistant message: {e}")
+            else:
+                # Handle regular message
+                async for chunk in chat_server.process_message(
+                    message=input_data.query,
+                    thread_id=thread_id,
+                    user_id=input_data.user_id,
+                    model_id=input_data.model_id,
+                    context=context
+                ):
+                    # Stream chunk to frontend
+                    yield json.dumps(chunk) + "\n"
                     
-                elif chunk.get("type") == "full_response":
-                    # Save assistant message with all tool events at once
-                    try:
-                        await frontend_store.add_message(
-                            thread_id=thread_id,
-                            role="assistant",
-                            content=chunk.get("content", ""),
-                            user_id=input_data.user_id,
-                            tool_events=tool_events if tool_events else None
-                        )
-                    except Exception as e:
-                        logger.warning(f"Error saving assistant message: {e}")
+                    # Collect tool events
+                    if chunk.get("type") == "tool_start":
+                        tool_events.append({
+                            "type": "tool_start",
+                            "name": chunk.get("name", "unknown"),
+                            "input": chunk.get("input", {})
+                        })
+                        
+                    elif chunk.get("type") == "tool_end":
+                        tool_events.append({
+                            "type": "tool_end",
+                            "name": chunk.get("name", "unknown"),
+                            "output": chunk.get("output", "")
+                        })
+                        
+                    elif chunk.get("type") == "full_response":
+                        # Save assistant message with all tool events at once
+                        try:
+                            await frontend_store.add_message(
+                                thread_id=thread_id,
+                                role="assistant",
+                                content=chunk.get("content", ""),
+                                user_id=input_data.user_id,
+                                tool_events=tool_events if tool_events else None
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error saving assistant message: {e}")
                     
         except Exception as e:
             logger.error(f"Error in chat stream: {e}")

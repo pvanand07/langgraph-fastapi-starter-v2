@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any
 from langchain.tools import tool, ToolRuntime
+from langgraph.types import interrupt
 import document_store
 import data_loader
 
@@ -313,8 +314,69 @@ async def create_view(
         return (error_msg, None)
 
 
+@tool
+def ask_question(questions: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """
+    Ask the user one or more questions and get their selections.
+    
+    This tool pauses execution and presents questions to the user via the frontend.
+    Each question supports multiple selections (checkboxes).
+    
+    Args:
+        questions: List of question dictionaries, each containing:
+            - question: str - The question text
+            - options: List[str] - List of available options
+            - question_id: str (optional) - Unique identifier (defaults to index)
+    
+    Returns:
+        Dictionary mapping question_id to list of selected options.
+        Example: {"q1": ["Red", "Blue"], "q2": ["Feature A"]}
+    
+    Examples:
+        # Single question example:
+        # ask_question([{
+        #     "question": "What colors do you like?",
+        #     "options": ["Red", "Blue", "Green", "Yellow"]
+        # }])
+        # Returns: {"question_0": ["Blue", "Green"]}
+        
+        # Multiple questions example:
+        # ask_question([
+        #     {
+        #         "question_id": "experience",
+        #         "question": "What is your experience level?",
+        #         "options": ["Beginner", "Intermediate", "Advanced"]
+        #     },
+        #     {
+        #         "question_id": "interests",
+        #         "question": "Which topics interest you?",
+        #         "options": ["Python", "JavaScript", "Data Science"]
+        #     }
+        # ])
+        # Returns: {"experience": ["Intermediate"], "interests": ["Python", "Data Science"]}
+    """
+    # Normalize questions to ensure each has a question_id
+    normalized_questions = []
+    for idx, q in enumerate(questions):
+        question_dict = q.copy()
+        if "question_id" not in question_dict:
+            question_dict["question_id"] = f"question_{idx}"
+        normalized_questions.append(question_dict)
+    
+    # Use interrupt to pause execution and wait for user input
+    # The interrupt will be caught by the HumanInTheLoopMiddleware
+    # and the user's answers will be provided when execution resumes
+    answers = interrupt({
+        "questions": normalized_questions,
+        "type": "ask_question"
+    })
+    
+    # The answers should be in the format: {"question_id": ["option1", "option2"], ...}
+    return answers if answers else {}
+
+
 def get_tools() -> List:
     """Get all available tools."""
-    return [calculator, get_current_time, search_documents, query_duckdb, create_view]
+    return [calculator, get_current_time, search_documents, query_duckdb, create_view, ask_question]
 
  

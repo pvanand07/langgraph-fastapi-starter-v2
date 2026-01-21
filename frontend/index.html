@@ -551,10 +551,169 @@ img, video {
         color: #ffffff;
     }
 }
+/* Human-in-the-Loop Questions Modal */
+.questions-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.3s ease;
+}
+.questions-modal {
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 600px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.3s ease;
+}
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.questions-modal h2 {
+    margin: 0 0 20px 0;
+    color: var(--primary-color);
+    font-size: 1.5em;
+}
+.question-item {
+    margin-bottom: 25px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #e0e0e0;
+}
+.question-item:last-child {
+    border-bottom: none;
+}
+.question-text {
+    font-weight: 500;
+    margin-bottom: 12px;
+    color: var(--text-color);
+    font-size: 1.1em;
+}
+.question-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.option-checkbox {
+    display: flex;
+    align-items: center;
+    padding: 10px 15px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background-color: #ffffff;
+}
+.option-checkbox:hover {
+    border-color: var(--primary-color);
+    background-color: var(--secondary-color);
+}
+.option-checkbox.selected {
+    border-color: var(--primary-color);
+    background-color: var(--primary-color);
+    color: #ffffff;
+}
+.option-checkbox input[type="checkbox"] {
+    margin-right: 10px;
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+.option-checkbox label {
+    flex: 1;
+    cursor: pointer;
+    user-select: none;
+}
+.questions-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 1px solid #e0e0e0;
+}
+.modal-button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-size: 1em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.modal-button-cancel {
+    background-color: #f0f0f0;
+    color: var(--text-color);
+}
+.modal-button-cancel:hover {
+    background-color: #e0e0e0;
+}
+.modal-button-submit {
+    background-color: var(--primary-color);
+    color: #ffffff;
+}
+.modal-button-submit:hover {
+    background-color: #005fa3;
+    transform: translateY(-2px);
+}
+.modal-button-submit:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+    transform: none;
+}
     </style>
 </head>
 <body>
     <div id="app">
+        <!-- Questions Modal -->
+        <div v-if="showQuestionsModal" class="questions-modal-overlay" @click.self="closeQuestionsModal">
+            <div class="questions-modal">
+                <h2>🤔 Please Answer These Questions</h2>
+                <div v-for="(question, qIndex) in pendingQuestions" :key="question.question_id" class="question-item">
+                    <div class="question-text">{{ qIndex + 1 }}. {{ question.question }}</div>
+                    <div class="question-options">
+                        <div v-for="(option, oIndex) in question.options" 
+                             :key="oIndex"
+                             class="option-checkbox"
+                             :class="{ 'selected': isOptionSelected(question.question_id, option) }"
+                             @click="toggleQuestionOption(question.question_id, option)">
+                            <input type="checkbox" 
+                                   :id="`q_${question.question_id}_${oIndex}`"
+                                   :checked="isOptionSelected(question.question_id, option)"
+                                   @change="toggleQuestionOption(question.question_id, option)">
+                            <label :for="`q_${question.question_id}_${oIndex}`">{{ option }}</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="questions-modal-actions">
+                    <button class="modal-button modal-button-cancel" @click="closeQuestionsModal">
+                        Cancel
+                    </button>
+                    <button class="modal-button modal-button-submit" 
+                            @click="submitAnswers"
+                            :disabled="!hasAnyAnswers">
+                        Submit Answers
+                    </button>
+                </div>
+            </div>
+        </div>
+        
         <!-- Chat Container -->
         <div class="chat-wrapper">
             <!-- Sidebar -->
@@ -734,6 +893,17 @@ img, video {
                 sidebarVisible: window.innerWidth > 900,
                 activeThreadId: null,
                 userId: 'string',
+                // Human-in-the-loop
+                showQuestionsModal: false,
+                pendingQuestions: [],
+                questionAnswers: {},
+                waitingForAnswers: false,
+            },
+            computed: {
+                hasAnyAnswers() {
+                    return Object.keys(this.questionAnswers).length > 0 &&
+                           Object.values(this.questionAnswers).some(answers => answers.length > 0);
+                }
             },
             methods: {
                 async loadThreads() {
@@ -838,7 +1008,13 @@ img, video {
                     this.sidebarVisible = !this.sidebarVisible;
                 },
                 async sendMessage() {
-                    if (!this.userInput.trim()) return;
+                    console.log('📨 [SEND] Send message called');
+                    console.log('   Input:', this.userInput);
+                    
+                    if (!this.userInput.trim()) {
+                        console.log('⚠️  [SEND] Empty input, aborting');
+                        return;
+                    }
                     
                     this.messages.push({ type: 'user', content: marked.parse(this.userInput) });
                     const message = this.userInput;
@@ -854,7 +1030,14 @@ img, video {
                         if (!this.threadId) {
                             this.threadId = uuid.v4();
                             this.activeThreadId = this.threadId;
+                            console.log('🆕 [SEND] New thread created:', this.threadId);
+                        } else {
+                            console.log('🧵 [SEND] Using existing thread:', this.threadId);
                         }
+                        
+                        console.log('📡 [SEND] Sending request to backend');
+                        console.log('   Message:', message);
+                        console.log('   User ID:', this.userId);
                         
                         const response = await fetch('http://localhost:8000/api/v1/chat', {
                             method: 'POST',
@@ -869,9 +1052,14 @@ img, video {
                             })
                         });
                         
+                        console.log('📥 [SEND] Response received:', response.status, response.statusText);
+                        
                         if (!response.ok) {
+                            console.error('❌ [SEND] HTTP error:', response.status);
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
+                        
+                        console.log('🔄 [SEND] Starting to stream response');
                         
                         const reader = response.body.getReader();
                         const decoder = new TextDecoder();
@@ -881,29 +1069,65 @@ img, video {
                         
                         while (true) {
                             const { done, value } = await reader.read();
-                            if (done) break;
+                            if (done) {
+                                console.log('🏁 [STREAM] Stream completed');
+                                break;
+                            }
                             
-                            buffer += decoder.decode(value, { stream: true });
+                            const decodedValue = decoder.decode(value, { stream: true });
+                            console.log('📦 [RAW CHUNK]', decodedValue);
+                            
+                            buffer += decodedValue;
                             const lines = buffer.split('\n');
                             buffer = lines.pop() || ''; // Keep incomplete line in buffer
                             
+                            console.log(`📝 [BUFFER] Processing ${lines.length} line(s)`);
+                            
                             for (const line of lines) {
-                                if (!line.trim()) continue;
+                                if (!line.trim()) {
+                                    console.log('⏭️  [SKIP] Empty line');
+                                    continue;
+                                }
                                 
                                 // Handle SSE format (strip "data: " prefix if present)
                                 let jsonLine = line.trim();
+                                console.log('📄 [LINE]', jsonLine);
+                                
                                 if (jsonLine.startsWith('data: ')) {
                                     jsonLine = jsonLine.substring(6);
+                                    console.log('🔄 [SSE] Stripped "data:" prefix:', jsonLine);
                                 }
                                 
                                 try {
                                     const chunk = JSON.parse(jsonLine);
+                                    console.log('✅ [PARSED]', chunk);
+                                    console.log(`🔍 [TYPE] Chunk type: "${chunk.type}"`);
                                     
                                     if (chunk.type === 'chunk' && chunk.content) {
+                                        console.log('💬 [CHUNK] Content chunk:', chunk.content.substring(0, 50) + '...');
                                         rawResponse += chunk.content;
                                         this.$set(this.messages[streamingIndex], 'content', marked.parse(rawResponse));
                                     }
+                                    else if (chunk.type === 'questions_pending') {
+                                        // Human-in-the-loop: Agent is asking questions
+                                        console.log('🤔 [HITL] Questions pending detected!');
+                                        console.log('📋 [HITL] Questions:', chunk.questions);
+                                        console.log(`🔢 [HITL] Number of questions: ${chunk.questions.length}`);
+                                        console.log('🧵 [HITL] Thread ID:', chunk.thread_id);
+                                        
+                                        // Remove the typing animation message
+                                        if (this.messages[streamingIndex].content === '') {
+                                            console.log('🗑️  [HITL] Removing empty typing message');
+                                            this.messages.splice(streamingIndex, 1);
+                                        }
+                                        // Show questions modal
+                                        console.log('🎬 [HITL] Showing question dialog...');
+                                        this.showQuestionDialog(chunk.questions);
+                                        console.log('⏸️  [HITL] Exiting stream, waiting for user answers');
+                                        return; // Exit stream, wait for user answers
+                                    }
                                     else if (chunk.type === 'tool_start') {
+                                        console.log('🔧 [TOOL START]', chunk.name, chunk.input);
                                         toolEvents.push({
                                             type: 'tool_start',
                                             name: chunk.name,
@@ -911,6 +1135,7 @@ img, video {
                                         });
                                     }
                                     else if (chunk.type === 'tool_end') {
+                                        console.log('✅ [TOOL END]', chunk.name);
                                         toolEvents.push({
                                             type: 'tool_end',
                                             name: chunk.name,
@@ -918,12 +1143,15 @@ img, video {
                                         });
                                     }
                                     else if (chunk.type === 'full_response' && chunk.content) {
+                                        console.log('🏁 [FULL RESPONSE] Received');
+                                        console.log('📊 [USAGE]', chunk.usage_metadata);
                                         rawResponse = chunk.content;
                                         this.$set(this.messages[streamingIndex], 'content', marked.parse(rawResponse));
                                         this.$set(this.messages[streamingIndex], 'rawResponse', rawResponse);
                                         
                                         // Display tool events if any
                                         if (toolEvents.length > 0) {
+                                            console.log(`🔧 [TOOLS] ${toolEvents.length} tool event(s) to display`);
                                             let toolsMessage = "\n\n**Tools Used:**\n";
                                             toolEvents.forEach(event => {
                                                 if (event.type === 'tool_start') {
@@ -938,45 +1166,60 @@ img, video {
                                         }
                                     }
                                     else if (chunk.type === 'error') {
+                                        console.error('❌ [ERROR] Error chunk received:', chunk.content);
                                         throw new Error(chunk.content || 'An error occurred');
+                                    }
+                                    else {
+                                        console.warn('⚠️  [UNKNOWN] Unknown chunk type:', chunk.type);
                                     }
                                 } catch (parseError) {
                                     // Skip invalid JSON lines
-                                    console.warn('Failed to parse chunk:', line, parseError);
+                                    console.warn('⚠️  [PARSE ERROR] Failed to parse chunk:', line);
+                                    console.warn('   Error:', parseError);
                                 }
                             }
                         }
                         
                         // Process any remaining buffer
                         if (buffer.trim()) {
+                            console.log('📦 [SEND] Processing remaining buffer:', buffer);
                             try {
                                 const chunk = JSON.parse(buffer);
+                                console.log('✅ [SEND] Buffer parsed:', chunk);
                                 if (chunk.type === 'full_response' && chunk.content) {
                                     rawResponse = chunk.content;
                                     this.$set(this.messages[streamingIndex], 'content', marked.parse(rawResponse));
                                     this.$set(this.messages[streamingIndex], 'rawResponse', rawResponse);
                                 }
                             } catch (e) {
-                                // Ignore parse errors for buffer
+                                console.warn('⚠️  [SEND] Failed to parse buffer:', e);
                             }
                         }
                         
                         // Ensure rawResponse is set
                         if (!this.messages[streamingIndex].rawResponse) {
+                            console.log('📝 [SEND] Setting rawResponse');
                             this.$set(this.messages[streamingIndex], 'rawResponse', rawResponse);
                         }
                         
                         // Generate audio from cleaned text
+                        console.log('🔊 [SEND] Generating audio...');
                         const cleanText = rawResponse.replace(/[#!*_\[\]\(\)`]/g, '');
                         const audioUrl = await this.convertToSpeech(cleanText);
                         if (audioUrl) {
+                            console.log('✅ [SEND] Audio generated');
                             this.$set(this.messages[streamingIndex], 'audio', audioUrl);
+                        } else {
+                            console.log('⚠️  [SEND] Audio generation skipped');
                         }
                         
                         // Refresh threads list after message is sent
+                        console.log('🔄 [SEND] Refreshing threads list');
                         await this.loadThreads();
+                        console.log('✅ [SEND] Complete!');
                     } catch (error) {
-                        console.error('Error:', error);
+                        console.error('❌ [SEND] Error:', error);
+                        console.error('   Stack:', error.stack);
                         this.messages.push({ type: 'bot', content: 'An error occurred while processing your request: ' + error.message });
                     }
                     this.$nextTick(() => this.scrollToBottom());
@@ -1108,6 +1351,240 @@ img, video {
                         console.error('Error downloading file:', error);
                         // You might want to show an error message to the user here
                     }
+                },
+                // Human-in-the-Loop Methods
+                showQuestionDialog(questions) {
+                    this.pendingQuestions = questions;
+                    this.questionAnswers = {};
+                    this.showQuestionsModal = true;
+                    this.waitingForAnswers = true;
+                },
+                toggleQuestionOption(questionId, option) {
+                    if (!this.questionAnswers[questionId]) {
+                        this.$set(this.questionAnswers, questionId, []);
+                    }
+                    
+                    const index = this.questionAnswers[questionId].indexOf(option);
+                    if (index > -1) {
+                        this.questionAnswers[questionId].splice(index, 1);
+                    } else {
+                        this.questionAnswers[questionId].push(option);
+                    }
+                },
+                isOptionSelected(questionId, option) {
+                    return this.questionAnswers[questionId] && 
+                           this.questionAnswers[questionId].includes(option);
+                },
+                closeQuestionsModal() {
+                    this.showQuestionsModal = false;
+                    this.pendingQuestions = [];
+                    this.questionAnswers = {};
+                    this.waitingForAnswers = false;
+                },
+                async submitAnswers() {
+                    console.log('📤 [SUBMIT] Submit answers clicked');
+                    console.log('   Answers:', JSON.stringify(this.questionAnswers, null, 2));
+                    
+                    if (!this.hasAnyAnswers) {
+                        console.warn('⚠️  [SUBMIT] No answers selected');
+                        alert('Please select at least one option before submitting.');
+                        return;
+                    }
+                    
+                    console.log('✅ [SUBMIT] Valid answers, proceeding');
+                    
+                    // Close the modal
+                    this.showQuestionsModal = false;
+                    
+                    // Add a user message showing selected answers
+                    let answerSummary = "**My Answers:**\n\n";
+                    this.pendingQuestions.forEach(q => {
+                        const answers = this.questionAnswers[q.question_id] || [];
+                        answerSummary += `- **${q.question}**: ${answers.join(', ') || '(no selection)'}\n`;
+                    });
+                    this.messages.push({ type: 'user', content: marked.parse(answerSummary) });
+                    
+                    // Add streaming bot message
+                    let streamingIndex = this.messages.push({ type: 'bot', content: '' }) - 1;
+                    
+                    this.$nextTick(() => {
+                        createTypingAnimation();
+                    });
+                    
+                    try {
+                        console.log('📡 [RESUME] Sending resume request to backend');
+                        console.log('   Thread ID:', this.threadId);
+                        console.log('   User ID:', this.userId);
+                        
+                        // Send resume request with answers
+                        const response = await fetch('http://localhost:8000/api/v1/chat', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                thread_id: this.threadId,
+                                user_id: this.userId,
+                                model_id: 'openai/gpt-4o-mini',
+                                resume_data: {
+                                    answers: this.questionAnswers
+                                }
+                            })
+                        });
+                        
+                        console.log('📥 [RESUME] Response received:', response.status, response.statusText);
+                        
+                        if (!response.ok) {
+                            console.error('❌ [RESUME] HTTP error:', response.status);
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        
+                        console.log('🔄 [RESUME] Starting to stream response');
+                        
+                        // Stream the response
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+                        let rawResponse = '';
+                        let toolEvents = [];
+                        let buffer = '';
+                        
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) {
+                                console.log('🏁 [RESUME STREAM] Stream completed');
+                                break;
+                            }
+                            
+                            const decodedValue = decoder.decode(value, { stream: true });
+                            console.log('📦 [RESUME RAW]', decodedValue);
+                            
+                            buffer += decodedValue;
+                            const lines = buffer.split('\n');
+                            buffer = lines.pop() || '';
+                            
+                            console.log(`📝 [RESUME BUFFER] Processing ${lines.length} line(s)`);
+                            
+                            for (const line of lines) {
+                                if (!line.trim()) {
+                                    console.log('⏭️  [RESUME] Empty line');
+                                    continue;
+                                }
+                                
+                                let jsonLine = line.trim();
+                                console.log('📄 [RESUME LINE]', jsonLine);
+                                
+                                if (jsonLine.startsWith('data: ')) {
+                                    jsonLine = jsonLine.substring(6);
+                                    console.log('🔄 [RESUME SSE] Stripped prefix:', jsonLine);
+                                }
+                                
+                                try {
+                                    const chunk = JSON.parse(jsonLine);
+                                    console.log('✅ [RESUME PARSED]', chunk);
+                                    console.log(`🔍 [RESUME TYPE] "${chunk.type}"`);
+                                    
+                                    if (chunk.type === 'chunk' && chunk.content) {
+                                        console.log('💬 [RESUME CHUNK]', chunk.content.substring(0, 50) + '...');
+                                        rawResponse += chunk.content;
+                                        this.$set(this.messages[streamingIndex], 'content', marked.parse(rawResponse));
+                                    }
+                                    else if (chunk.type === 'questions_pending') {
+                                        // Handle additional questions (recursive)
+                                        console.log('🤔 [RESUME HITL] Additional questions detected!');
+                                        console.log('📋 [RESUME HITL] Questions:', chunk.questions);
+                                        console.log('🔄 [RESUME HITL] Recursive HITL - showing new questions');
+                                        this.showQuestionDialog(chunk.questions);
+                                        console.log('⏸️  [RESUME HITL] Exiting resume stream');
+                                        return; // Exit this stream, wait for new answers
+                                    }
+                                    else if (chunk.type === 'tool_start') {
+                                        console.log('🔧 [RESUME TOOL START]', chunk.name, chunk.input);
+                                        toolEvents.push({
+                                            type: 'tool_start',
+                                            name: chunk.name,
+                                            input: chunk.input
+                                        });
+                                    }
+                                    else if (chunk.type === 'tool_end') {
+                                        console.log('✅ [RESUME TOOL END]', chunk.name);
+                                        toolEvents.push({
+                                            type: 'tool_end',
+                                            name: chunk.name,
+                                            output: chunk.output
+                                        });
+                                    }
+                                    else if (chunk.type === 'full_response' && chunk.content) {
+                                        console.log('🏁 [RESUME FULL RESPONSE] Received');
+                                        console.log('📊 [RESUME USAGE]', chunk.usage_metadata);
+                                        rawResponse = chunk.content;
+                                        this.$set(this.messages[streamingIndex], 'content', marked.parse(rawResponse));
+                                        this.$set(this.messages[streamingIndex], 'rawResponse', rawResponse);
+                                        
+                                        if (toolEvents.length > 0) {
+                                            console.log(`🔧 [RESUME TOOLS] ${toolEvents.length} tool event(s)`);
+                                            let toolsMessage = "\n\n**Tools Used:**\n";
+                                            toolEvents.forEach(event => {
+                                                if (event.type === 'tool_start') {
+                                                    const inputStr = typeof event.input === 'object' 
+                                                        ? JSON.stringify(event.input) 
+                                                        : event.input;
+                                                    toolsMessage += `- ${event.name.charAt(0).toUpperCase() + event.name.slice(1)}: ${inputStr}\n`;
+                                                }
+                                            });
+                                            this.$set(this.messages[streamingIndex], 'content', 
+                                                this.messages[streamingIndex].content + marked.parse(toolsMessage));
+                                        }
+                                    }
+                                    else if (chunk.type === 'error') {
+                                        console.error('❌ [RESUME ERROR]', chunk.content);
+                                        throw new Error(chunk.content || 'An error occurred');
+                                    }
+                                    else {
+                                        console.warn('⚠️  [RESUME UNKNOWN]', chunk.type);
+                                    }
+                                } catch (parseError) {
+                                    console.warn('⚠️  [RESUME PARSE ERROR]', line);
+                                    console.warn('   Error:', parseError);
+                                }
+                            }
+                        }
+                        
+                        // Clean up
+                        console.log('🧹 [RESUME] Cleaning up');
+                        this.waitingForAnswers = false;
+                        this.questionAnswers = {};
+                        this.pendingQuestions = [];
+                        console.log('✅ [RESUME] Cleanup complete');
+                        
+                        // Ensure rawResponse is set
+                        if (!this.messages[streamingIndex].rawResponse) {
+                            console.log('📝 [RESUME] Setting rawResponse');
+                            this.$set(this.messages[streamingIndex], 'rawResponse', rawResponse);
+                        }
+                        
+                        // Generate audio
+                        console.log('🔊 [RESUME] Generating audio...');
+                        const cleanText = rawResponse.replace(/[#!*_\[\]\(\)`]/g, '');
+                        const audioUrl = await this.convertToSpeech(cleanText);
+                        if (audioUrl) {
+                            console.log('✅ [RESUME] Audio generated');
+                            this.$set(this.messages[streamingIndex], 'audio', audioUrl);
+                        } else {
+                            console.log('⚠️  [RESUME] Audio generation skipped');
+                        }
+                        
+                        // Refresh threads
+                        console.log('🔄 [RESUME] Refreshing threads list');
+                        await this.loadThreads();
+                        console.log('✅ [RESUME] Complete!');
+                    } catch (error) {
+                        console.error('❌ [RESUME] Error submitting answers:', error);
+                        console.error('   Stack:', error.stack);
+                        this.messages.push({ type: 'bot', content: 'An error occurred while processing your answers: ' + error.message });
+                        this.waitingForAnswers = false;
+                    }
+                    
+                    this.$nextTick(() => this.scrollToBottom());
                 },
             },
             watch: {
