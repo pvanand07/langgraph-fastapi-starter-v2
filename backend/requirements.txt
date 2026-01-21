@@ -27,6 +27,9 @@ sqlalchemy
 pymupdf4llm==0.0.27
 pymupdf==1.26.3
 
+# DOCX parsing
+python-docx
+
 # Data validation
 pydantic
 

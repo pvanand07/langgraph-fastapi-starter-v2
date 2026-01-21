@@ -18,6 +18,11 @@ try:
 except ImportError:
     raise RuntimeError("Please install pymupdf4llm: pip install pymupdf4llm")
 
+try:
+    from docx import Document as DocxDocument
+except ImportError:
+    DocxDocument = None
+
 # Database setup
 os.makedirs(os.path.dirname(DOCUMENTS_DB_PATH), exist_ok=True)
 engine = create_engine(f"sqlite:///{DOCUMENTS_DB_PATH}", echo=False)
@@ -149,6 +154,91 @@ def extract_pages_text_from_bytes(pdf_bytes: bytes, doc_id: str, user_id: str, f
         doc.close()
     except Exception as e:
         raise RuntimeError(f"Error extracting PDF pages: {e}")
+    
+    return pages
+
+
+def extract_pages_text_from_docx_bytes(docx_bytes: bytes, doc_id: str, user_id: str, filename: str = "") -> List[Dict]:
+    """Extract text from DOCX bytes and return list of page dictionaries."""
+    if DocxDocument is None:
+        raise RuntimeError("Please install python-docx: pip install python-docx")
+    
+    pages = []
+    
+    try:
+        from io import BytesIO
+        doc = DocxDocument(BytesIO(docx_bytes))
+        
+        # DOCX doesn't have pages like PDF, so we'll split by paragraphs
+        # Group paragraphs into "pages" of roughly similar size
+        all_text_parts = []
+        
+        for paragraph in doc.paragraphs:
+            text = paragraph.text.strip()
+            if text:
+                all_text_parts.append(text)
+        
+        # Also extract text from tables
+        for table in doc.tables:
+            table_text = []
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    cell_text = cell.text.strip()
+                    if cell_text:
+                        row_text.append(cell_text)
+                if row_text:
+                    table_text.append(" | ".join(row_text))
+            if table_text:
+                all_text_parts.append("\n".join(table_text))
+        
+        if not all_text_parts:
+            raise RuntimeError("No text content found in DOCX file")
+        
+        # Split into pages (approximately 2000 tokens per page)
+        # Estimate tokens per character (roughly 4 chars per token)
+        chars_per_page = 8000  # ~2000 tokens * 4 chars/token
+        
+        page_num = 1
+        current_page_text = ""
+        current_chars = 0
+        
+        for part in all_text_parts:
+            part_chars = len(part)
+            
+            if current_chars + part_chars > chars_per_page and current_page_text:
+                # Save current page
+                token_count = len(enc.encode(current_page_text))
+                pages.append({
+                    "user_id": user_id,
+                    "doc_id": doc_id,
+                    "page_number": page_num,
+                    "content": current_page_text,
+                    "token_count": token_count
+                })
+                page_num += 1
+                current_page_text = part
+                current_chars = part_chars
+            else:
+                if current_page_text:
+                    current_page_text += "\n\n" + part
+                else:
+                    current_page_text = part
+                current_chars += part_chars + 2  # +2 for "\n\n"
+        
+        # Add the last page
+        if current_page_text:
+            token_count = len(enc.encode(current_page_text))
+            pages.append({
+                "user_id": user_id,
+                "doc_id": doc_id,
+                "page_number": page_num,
+                "content": current_page_text,
+                "token_count": token_count
+            })
+        
+    except Exception as e:
+        raise RuntimeError(f"Error extracting DOCX pages: {e}")
     
     return pages
 

@@ -19,7 +19,7 @@ from config import HOST, PORT, DEBUG
 from models import (
     ChatInput, ThreadListResponse, ThreadResponse,
     MessageListResponse, MessageResponse, DocumentListResponse,
-    DocumentResponse, UploadResponse, HealthResponse, ExcelUploadResponse
+    DocumentResponse, HealthResponse, UnifiedUploadResponse
 )
 from server import ChatServer
 from memory_store import initialize_database
@@ -230,125 +230,120 @@ async def chat(input_data: ChatInput):
     )
 
 
-@app.post("/api/v1/upload", response_model=UploadResponse)
+@app.post("/api/v1/upload", response_model=UnifiedUploadResponse)
 async def upload_file(
     user_id: str = Form(...),
+    session_id: Optional[str] = Form(None, description="Session ID (required for Excel files)"),
     file: UploadFile = File(...)
 ):
     """
-    Upload a PDF file and store it as a document.
+    Unified file upload endpoint supporting PDF, DOCX, and Excel files.
     
-    Returns document ID and page count.
+    Accepts:
+    - user_id: User ID (required)
+    - session_id: Session ID (required for Excel files, optional for documents)
+    - file: File to upload (.pdf, .docx, .xlsx, .xls)
+    
+    Returns:
+    - For PDF/DOCX: Document ID and page count
+    - For Excel: Table name, row count, column count, and metadata
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
     
-    # Check file type
-    if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    filename_lower = file.filename.lower()
     
     try:
         # Read file bytes
-        pdf_bytes = await file.read()
+        file_bytes = await file.read()
         
-        if not pdf_bytes:
+        if not file_bytes:
             raise HTTPException(status_code=400, detail="Empty file")
         
-        # Generate doc_id from filename
-        doc_id = document_store.generate_doc_id(file.filename)
-        
-        # Extract pages
-        pages = document_store.extract_pages_text_from_bytes(
-            pdf_bytes=pdf_bytes,
-            doc_id=doc_id,
-            user_id=user_id,
-            filename=file.filename
-        )
-        
-        if not pages:
-            raise HTTPException(
-                status_code=500,
-                detail="Could not extract text from PDF. The document may be empty or contain only images."
+        # Route based on file type
+        if filename_lower.endswith(('.pdf', '.docx')):
+            # Handle PDF or DOCX documents
+            # Generate doc_id from filename
+            doc_id = document_store.generate_doc_id(file.filename)
+            
+            # Extract pages based on file type
+            if filename_lower.endswith('.pdf'):
+                pages = document_store.extract_pages_text_from_bytes(
+                    pdf_bytes=file_bytes,
+                    doc_id=doc_id,
+                    user_id=user_id,
+                    filename=file.filename
+                )
+            else:  # .docx
+                pages = document_store.extract_pages_text_from_docx_bytes(
+                    docx_bytes=file_bytes,
+                    doc_id=doc_id,
+                    user_id=user_id,
+                    filename=file.filename
+                )
+            
+            if not pages:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not extract text from {file.filename}. The document may be empty or contain only images."
+                )
+            
+            # Store pages
+            document_store.store_pages(
+                pages=pages,
+                user_id=user_id,
+                doc_id=doc_id,
+                doc_name=file.filename
+            )
+            
+            return UnifiedUploadResponse(
+                file_type="document",
+                message=f"Successfully stored {len(pages)} pages",
+                filename=file.filename,
+                doc_id=doc_id,
+                page_count=len(pages)
             )
         
-        # Store pages
-        document_store.store_pages(
-            pages=pages,
-            user_id=user_id,
-            doc_id=doc_id,
-            doc_name=file.filename
-        )
+        elif filename_lower.endswith(('.xlsx', '.xls')):
+            # Handle Excel files
+            if not session_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="session_id is required for Excel file uploads"
+                )
+            
+            # Load Excel file into DuckDB
+            result = data_loader.load_excel_file(
+                excel_bytes=file_bytes,
+                filename=file.filename,
+                user_id=user_id,
+                session_id=session_id
+            )
+            
+            return UnifiedUploadResponse(
+                file_type="excel",
+                message=f"Successfully loaded {result['row_count']} rows into table {result['table_name']}",
+                filename=result['filename'],
+                table_name=result['table_name'],
+                row_count=result['row_count'],
+                column_count=result['column_count'],
+                columns=result['columns'],
+                metadata=result['metadata']
+            )
         
-        return UploadResponse(
-            message=f"Successfully stored {len(pages)} pages",
-            doc_id=doc_id,
-            page_count=len(pages)
-        )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Only PDF, DOCX, and Excel (.xlsx, .xls) files are supported"
+            )
     
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
-    finally:
-        await file.close()
-
-
-@app.post("/api/v1/upload-excel", response_model=ExcelUploadResponse)
-async def upload_excel_file(
-    user_id: str = Form(...),
-    session_id: str = Form(...),
-    file: UploadFile = File(...)
-):
-    """
-    Upload an Excel (.xlsx) file and store it in DuckDB.
-    
-    Accepts:
-    - user_id: User ID
-    - session_id: Session ID
-    - file: Excel file (.xlsx only)
-    
-    Returns table name, row count, column count, and metadata.
-    """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-    
-    # Check file type - only .xlsx files
-    if not file.filename.lower().endswith(('.xlsx', '.xls')):
-        raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
-    
-    try:
-        # Read file bytes
-        excel_bytes = await file.read()
-        
-        if not excel_bytes:
-            raise HTTPException(status_code=400, detail="Empty file")
-        
-        # Load Excel file into DuckDB
-        result = data_loader.load_excel_file(
-            excel_bytes=excel_bytes,
-            filename=file.filename,
-            user_id=user_id,
-            session_id=session_id
-        )
-        
-        return ExcelUploadResponse(
-            message=f"Successfully loaded {result['row_count']} rows into table {result['table_name']}",
-            table_name=result['table_name'],
-            filename=result['filename'],
-            row_count=result['row_count'],
-            column_count=result['column_count'],
-            columns=result['columns'],
-            metadata=result['metadata']
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error uploading Excel file: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing Excel file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
     finally:
         await file.close()
 
@@ -558,10 +553,9 @@ async def root():
     return {
         "message": "LangGraph Chatbot API",
         "version": "1.0.0",
-        "endpoints": {
+            "endpoints": {
             "chat": "POST /api/v1/chat - Chat with streaming responses",
-            "upload": "POST /api/v1/upload - Upload PDF documents",
-            "upload_excel": "POST /api/v1/upload-excel - Upload Excel (.xlsx) files to DuckDB",
+            "upload": "POST /api/v1/upload - Upload files (PDF, DOCX, Excel)",
             "metadata_csv": "GET /api/v1/metadata-csv - Get metadata table as CSV (filtered by user_id, session_id)",
             "tables_by_schema_csv": "GET /api/v1/tables-by-schema-csv - Get tables grouped by schema as CSV",
             "threads": "GET /api/v1/threads - List conversation threads",

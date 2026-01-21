@@ -94,6 +94,24 @@ class ExcelUploadResponse(BaseModel):
     metadata: dict
 
 
+class UnifiedUploadResponse(BaseModel):
+    """Unified file upload response for documents (PDF/DOCX) and Excel files."""
+    file_type: Literal["document", "excel"]
+    message: str
+    filename: str
+    
+    # Document fields (for PDF/DOCX)
+    doc_id: Optional[str] = None
+    page_count: Optional[int] = None
+    
+    # Excel fields
+    table_name: Optional[str] = None
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
+    columns: Optional[List[str]] = None
+    metadata: Optional[dict] = None
+
+
 class CSVResponse(BaseModel):
     """CSV data response."""
     csv_data: str

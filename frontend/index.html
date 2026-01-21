@@ -309,6 +309,28 @@ th, td {
 #user-input:focus {
     box-shadow: 0 0 0 3px rgba(0,119,190,0.3);
 }
+.upload-button {
+    background-color: #ffffff;
+    color: var(--primary-color);
+    border: 2px solid var(--primary-color);
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    margin-right: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+}
+.upload-button:hover {
+    background-color: var(--secondary-color);
+    transform: scale(1.05);
+}
+.upload-button svg {
+    width: 24px;
+    height: 24px;
+}
 .send-button, .reset-button {
     background-color: var(--primary-color);
     color: #ffffff;
@@ -330,6 +352,27 @@ th, td {
 .send-button svg, .reset-button svg {
     width: 24px;
     height: 24px;
+}
+.upload-status {
+    background-color: var(--secondary-color);
+    color: var(--text-color);
+    align-self: flex-start;
+    border-bottom-left-radius: 5px;
+    padding: 10px 20px;
+    margin-bottom: 10px;
+    border-left: 3px solid var(--primary-color);
+}
+.upload-status.success {
+    background-color: #e8f5e9;
+    border-left-color: #4caf50;
+}
+.upload-status.error {
+    background-color: #ffebee;
+    border-left-color: #f44336;
+}
+.upload-status.uploading {
+    background-color: #fff3e0;
+    border-left-color: #ff9800;
 }
 .option-buttons {
     display: flex;
@@ -524,7 +567,7 @@ img, video {
         font-size: 16px;
         padding: 12px;
     }
-    .send-button, .reset-button {
+    .upload-button, .send-button, .reset-button {
         width: 44px;
         height: 44px;
     }
@@ -551,10 +594,149 @@ img, video {
         color: #ffffff;
     }
 }
+/* Email Modal Styles */
+.email-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.3s ease;
+}
+.email-modal {
+    background-color: #ffffff;
+    border-radius: 15px;
+    padding: 30px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    animation: slideUp 0.3s ease;
+}
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.email-modal h2 {
+    margin: 0 0 15px 0;
+    color: var(--primary-color);
+    font-size: 1.5em;
+}
+.email-modal p {
+    margin: 0 0 20px 0;
+    color: #666;
+    font-size: 0.95em;
+}
+.email-modal input {
+    width: 100%;
+    padding: 12px 15px;
+    border: 2px solid var(--primary-color);
+    border-radius: 8px;
+    font-size: 1em;
+    outline: none;
+    transition: all 0.3s ease;
+    box-sizing: border-box;
+    margin-bottom: 15px;
+}
+.email-modal input:focus {
+    box-shadow: 0 0 0 3px rgba(48, 75, 118, 0.2);
+}
+.email-modal-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+.email-modal-button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 1em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.email-modal-button.primary {
+    background-color: var(--primary-color);
+    color: #ffffff;
+}
+.email-modal-button.primary:hover {
+    background-color: #005fa3;
+    transform: translateY(-2px);
+}
+.email-modal-button.secondary {
+    background-color: #f0f0f0;
+    color: var(--text-color);
+}
+.email-modal-button.secondary:hover {
+    background-color: #e0e0e0;
+}
+.email-error {
+    color: #d32f2f;
+    font-size: 0.875em;
+    margin-top: -10px;
+    margin-bottom: 10px;
+}
+.user-email-display {
+    padding: 8px 15px;
+    font-size: 0.875em;
+    color: #666;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.user-email-display span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.user-email-display button {
+    background: none;
+    border: none;
+    color: var(--primary-color);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 0.875em;
+    text-decoration: underline;
+    margin-left: 10px;
+}
+.user-email-display button:hover {
+    color: #005fa3;
+}
     </style>
 </head>
 <body>
     <div id="app">
+        <!-- Email Modal -->
+        <div class="email-modal-overlay" v-if="showEmailModal" @click.self="closeEmailModal">
+            <div class="email-modal">
+                <h2>Enter Your Email</h2>
+                <p>Please enter your email address to continue using the chat.</p>
+                <input 
+                    type="email" 
+                    v-model="emailInput" 
+                    @keyup.enter="submitEmail"
+                    placeholder="your.email@example.com"
+                    ref="emailInput"
+                >
+                <div v-if="emailError" class="email-error">{{ emailError }}</div>
+                <div class="email-modal-buttons">
+                    <button class="email-modal-button secondary" @click="closeEmailModal">Cancel</button>
+                    <button class="email-modal-button primary" @click="submitEmail">Continue</button>
+                </div>
+            </div>
+        </div>
         <!-- Chat Container -->
         <div class="chat-wrapper">
             <!-- Sidebar -->
@@ -567,6 +749,10 @@ img, video {
                             <line x1="6" y1="6" x2="18" y2="18"></line>
                         </svg>
                     </button>
+                </div>
+                <div class="user-email-display" v-if="userId && userId !== 'string'">
+                    <span>{{ userId }}</span>
+                    <button @click="changeEmail">Change</button>
                 </div>
                 <button class="new-chat-button" @click="startNewChat">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -610,7 +796,11 @@ img, video {
                 </div>
                 <div class="messages" ref="messageContainer" @scroll="handleScroll">
                 <div v-for="(message, index) in messages" :key="index" 
-                     :class="['message', message.type === 'user' ? 'user-message' : 'bot-message']">
+                     :class="[
+                         message.type === 'upload' ? 'upload-status' : 'message',
+                         message.type === 'user' ? 'user-message' : message.type === 'bot' ? 'bot-message' : '',
+                         message.status ? message.status : ''
+                     ]">
                     <div v-if="message.type === 'bot' && message.content === ''" id="typing-animation"></div>
                     <div v-else v-html="message.content"></div>
                     <button v-if="message.type === 'bot' && message.audio" @click="toggleAudio(index)" class="audio-button">
@@ -629,7 +819,15 @@ img, video {
                     </button>
                 </div>
             </div>
-            <div class="input-area" :class="{ 'input-hidden': isScrollingUp }">
+            <div class="input-area">
+                <input type="file" id="file-input" ref="fileInput" @change="handleFileSelect" accept=".pdf,.docx,.xlsx,.xls" style="display: none;">
+                <button class="upload-button" @click="triggerFileInput" title="Upload file (PDF, DOCX, Excel)">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                </button>
                 <input type="text" id="user-input" v-model="userInput" @keyup.enter="sendMessage" placeholder="Type your message...">
                 <button class="send-button" @click="sendMessage">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -667,6 +865,29 @@ img, video {
             dot.className = 'dot';
             container.appendChild(dot);
           }
+        }
+
+        // Cookie utility functions
+        function setCookie(name, value, days = 365) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            const expires = "expires=" + date.toUTCString();
+            document.cookie = name + "=" + value + ";" + expires + ";path=/";
+        }
+        
+        function getCookie(name) {
+            const nameEQ = name + "=";
+            const ca = document.cookie.split(';');
+            for (let i = 0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+            }
+            return null;
+        }
+        
+        function deleteCookie(name) {
+            document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
         }
 
         function extractCustomFileName(html) {
@@ -733,13 +954,157 @@ img, video {
                 loadingThreads: false,
                 sidebarVisible: window.innerWidth > 900,
                 activeThreadId: null,
-                userId: 'string',
+                userId: null,
+                showEmailModal: false,
+                emailInput: '',
+                emailError: '',
+                uploadingFile: false,
             },
             methods: {
+                // File upload methods
+                triggerFileInput() {
+                    if (!this.userId || this.userId === 'string') {
+                        this.showEmailModal = true;
+                        this.$nextTick(() => {
+                            if (this.$refs.emailInput) {
+                                this.$refs.emailInput.focus();
+                            }
+                        });
+                        return;
+                    }
+                    this.$refs.fileInput.click();
+                },
+                async handleFileSelect(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    // Reset file input
+                    event.target.value = '';
+                    
+                    // Check if userId is set
+                    if (!this.userId || this.userId === 'string') {
+                        this.showEmailModal = true;
+                        return;
+                    }
+                    
+                    // Show uploading status
+                    const uploadIndex = this.messages.push({
+                        type: 'upload',
+                        content: `Uploading ${file.name}...`,
+                        status: 'uploading'
+                    }) - 1;
+                    
+                    this.uploadingFile = true;
+                    
+                    try {
+                        // Create FormData
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        formData.append('user_id', this.userId);
+                        
+                        // For Excel files, session_id (thread_id) is required
+                        const isExcel = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls');
+                        if (isExcel) {
+                            // Initialize thread_id if not set
+                            if (!this.threadId) {
+                                this.threadId = uuid.v4();
+                                this.activeThreadId = this.threadId;
+                            }
+                            formData.append('session_id', this.threadId);
+                        }
+                        
+                        // Upload file
+                        const response = await fetch('http://localhost:8000/api/v1/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        if (!response.ok) {
+                            const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
+                            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+                        }
+                        
+                        const result = await response.json();
+                        
+                        // Update status message with success
+                        let successMessage = '';
+                        if (result.file_type === 'document') {
+                            successMessage = `✅ **${result.filename}** uploaded successfully!\n- Pages: ${result.page_count}\n- Document ID: ${result.doc_id}`;
+                        } else if (result.file_type === 'excel') {
+                            successMessage = `✅ **${result.filename}** uploaded successfully!\n- Table: ${result.table_name}\n- Rows: ${result.row_count}\n- Columns: ${result.column_count}`;
+                        } else {
+                            successMessage = `✅ **${result.filename}** uploaded successfully!`;
+                        }
+                        
+                        this.$set(this.messages[uploadIndex], 'content', marked.parse(successMessage));
+                        this.$set(this.messages[uploadIndex], 'status', 'success');
+                        
+                        // Refresh threads list if this is a new thread
+                        if (isExcel && !this.activeThreadId) {
+                            await this.loadThreads();
+                        }
+                        
+                    } catch (error) {
+                        console.error('Upload error:', error);
+                        const errorMessage = `❌ Failed to upload **${file.name}**: ${error.message}`;
+                        this.$set(this.messages[uploadIndex], 'content', marked.parse(errorMessage));
+                        this.$set(this.messages[uploadIndex], 'status', 'error');
+                    } finally {
+                        this.uploadingFile = false;
+                        this.$nextTick(() => this.scrollToBottom());
+                    }
+                },
+                // Email modal methods
+                submitEmail() {
+                    this.emailError = '';
+                    const email = this.emailInput.trim();
+                    
+                    // Basic email validation
+                    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                    if (!email) {
+                        this.emailError = 'Please enter your email address';
+                        return;
+                    }
+                    if (!emailRegex.test(email)) {
+                        this.emailError = 'Please enter a valid email address';
+                        return;
+                    }
+                    
+                    // Store email in cookie and set as userId
+                    setCookie('user_email', email);
+                    this.userId = email;
+                    this.showEmailModal = false;
+                    this.emailInput = '';
+                    this.emailError = '';
+                    
+                    // Load threads after setting userId
+                    this.loadThreads();
+                },
+                closeEmailModal() {
+                    // Don't allow closing if no email is set
+                    if (!this.userId || this.userId === 'string') {
+                        return;
+                    }
+                    this.showEmailModal = false;
+                    this.emailInput = '';
+                    this.emailError = '';
+                },
+                changeEmail() {
+                    this.showEmailModal = true;
+                    this.emailInput = this.userId || '';
+                    this.$nextTick(() => {
+                        if (this.$refs.emailInput) {
+                            this.$refs.emailInput.focus();
+                        }
+                    });
+                },
                 async loadThreads() {
+                    if (!this.userId || this.userId === 'string') {
+                        return;
+                    }
                     this.loadingThreads = true;
                     try {
-                        const response = await fetch(`http://localhost:8000/api/v1/threads?user_id=${this.userId}&limit=20&order=desc`);
+                        const response = await fetch(`http://localhost:8000/api/v1/threads?user_id=${encodeURIComponent(this.userId)}&limit=20&order=desc`);
                         if (!response.ok) {
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
@@ -753,8 +1118,11 @@ img, video {
                     }
                 },
                 async loadThreadMessages(threadId) {
+                    if (!this.userId || this.userId === 'string') {
+                        throw new Error('User ID not set');
+                    }
                     try {
-                        const response = await fetch(`http://localhost:8000/api/v1/threads/${threadId}/messages?user_id=${this.userId}&limit=50&order=asc`);
+                        const response = await fetch(`http://localhost:8000/api/v1/threads/${threadId}/messages?user_id=${encodeURIComponent(this.userId)}&limit=50&order=asc`);
                         if (!response.ok) {
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
@@ -839,6 +1207,17 @@ img, video {
                 },
                 async sendMessage() {
                     if (!this.userInput.trim()) return;
+                    
+                    // Check if userId is set
+                    if (!this.userId || this.userId === 'string') {
+                        this.showEmailModal = true;
+                        this.$nextTick(() => {
+                            if (this.$refs.emailInput) {
+                                this.$refs.emailInput.focus();
+                            }
+                        });
+                        return;
+                    }
                     
                     this.messages.push({ type: 'user', content: marked.parse(this.userInput) });
                     const message = this.userInput;
@@ -1116,9 +1495,22 @@ img, video {
                 }
             },
             mounted() {
-                this.resetConversation();
-                // Load threads on mount
-                this.loadThreads();
+                // Check for email in cookies
+                const savedEmail = getCookie('user_email');
+                if (savedEmail) {
+                    this.userId = savedEmail;
+                    this.resetConversation();
+                    // Load threads on mount
+                    this.loadThreads();
+                } else {
+                    // Show email modal if no email is found
+                    this.showEmailModal = true;
+                    this.$nextTick(() => {
+                        if (this.$refs.emailInput) {
+                            this.$refs.emailInput.focus();
+                        }
+                    });
+                }
             }
         });
     </script>
