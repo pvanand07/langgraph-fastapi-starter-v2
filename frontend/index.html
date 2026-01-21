@@ -1014,7 +1014,7 @@ img, video {
                         }
                         
                         // Upload file
-                        const response = await fetch('http://localhost:8000/api/v1/upload', {
+                        const response = await fetch('/api/v1/upload', {
                             method: 'POST',
                             body: formData
                         });
@@ -1104,7 +1104,7 @@ img, video {
                     }
                     this.loadingThreads = true;
                     try {
-                        const response = await fetch(`http://localhost:8000/api/v1/threads?user_id=${encodeURIComponent(this.userId)}&limit=20&order=desc`);
+                        const response = await fetch(`/api/v1/threads?user_id=${encodeURIComponent(this.userId)}&limit=20&order=desc`);
                         if (!response.ok) {
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
@@ -1122,7 +1122,7 @@ img, video {
                         throw new Error('User ID not set');
                     }
                     try {
-                        const response = await fetch(`http://localhost:8000/api/v1/threads/${threadId}/messages?user_id=${encodeURIComponent(this.userId)}&limit=50&order=asc`);
+                        const response = await fetch(`/api/v1/threads/${threadId}/messages?user_id=${encodeURIComponent(this.userId)}&limit=50&order=asc`);
                         if (!response.ok) {
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
@@ -1235,7 +1235,7 @@ img, video {
                             this.activeThreadId = this.threadId;
                         }
                         
-                        const response = await fetch('http://localhost:8000/api/v1/chat', {
+                        const response = await fetch('/api/v1/chat', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'

@@ -11,8 +11,11 @@ import logging
 dotenv.load_dotenv("secrets.env")
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from config import HOST, PORT, DEBUG
@@ -79,6 +82,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Get the frontend directory path
+# Try Docker path first (/app/frontend), then local development path
+frontend_dir = None
+docker_path = Path("/app/frontend")
+local_path = Path(__file__).parent.parent / "frontend"
+
+if docker_path.exists():
+    frontend_dir = docker_path
+elif local_path.exists():
+    frontend_dir = local_path
+
+# Mount static files from frontend directory
+if frontend_dir:
+    app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
+    logger.info(f"✅ Frontend static files mounted from {frontend_dir}")
+else:
+    logger.warning(f"⚠️ Frontend directory not found (checked {docker_path} and {local_path})")
 
 
 @app.post("/api/v1/chat")
@@ -549,11 +570,17 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    """Root endpoint - API info."""
+    """Serve the frontend index.html file."""
+    if frontend_dir:
+        index_path = frontend_dir / "index.html"
+        if index_path.exists():
+            return FileResponse(str(index_path))
+    
+    # Fallback to API info if frontend not found
     return {
         "message": "LangGraph Chatbot API",
         "version": "1.0.0",
-            "endpoints": {
+        "endpoints": {
             "chat": "POST /api/v1/chat - Chat with streaming responses",
             "upload": "POST /api/v1/upload - Upload files (PDF, DOCX, Excel)",
             "metadata_csv": "GET /api/v1/metadata-csv - Get metadata table as CSV (filtered by user_id, session_id)",
