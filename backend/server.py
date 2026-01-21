@@ -7,6 +7,7 @@ import logging
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
+from prompt import CONTEXT_INTELLIGENCE_PROMPT
 
 from config import DEFAULT_MODEL_CONFIG
 from memory_store import get_memory
@@ -48,7 +49,8 @@ When users ask questions about their data:
 5. Reference the table names and schemas provided in the context to construct accurate queries
 
 Be helpful, and accurate in your responses.
-If you are not sure about the answer, say so and ask the user for more information."""
+If you are not sure about the answer, say so and ask the user for more information.
+{CONTEXT_INTELLIGENCE_PROMPT}"""
     
     if context:
         base_prompt += f"\n\nCONTEXT:\n{context}"
