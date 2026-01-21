@@ -820,8 +820,8 @@ img, video {
                 </div>
             </div>
             <div class="input-area">
-                <input type="file" id="file-input" ref="fileInput" @change="handleFileSelect" accept=".pdf,.docx,.xlsx,.xls" style="display: none;">
-                <button class="upload-button" @click="triggerFileInput" title="Upload file (PDF, DOCX, Excel)">
+                <input type="file" id="file-input" ref="fileInput" @change="handleFileSelect" accept=".pdf,.docx,.xlsx,.xls" multiple style="display: none;">
+                <button class="upload-button" @click="triggerFileInput" title="Upload files (PDF, DOCX, Excel) - Multiple files supported">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                         <polyline points="17 8 12 3 7 8"></polyline>
@@ -975,8 +975,8 @@ img, video {
                     this.$refs.fileInput.click();
                 },
                 async handleFileSelect(event) {
-                    const file = event.target.files[0];
-                    if (!file) return;
+                    const files = Array.from(event.target.files || []);
+                    if (files.length === 0) return;
                     
                     // Reset file input
                     event.target.value = '';
@@ -987,33 +987,45 @@ img, video {
                         return;
                     }
                     
-                    // Show uploading status
-                    const uploadIndex = this.messages.push({
-                        type: 'upload',
-                        content: `Uploading ${file.name}...`,
-                        status: 'uploading'
-                    }) - 1;
+                    // Check if any Excel files require session_id
+                    const hasExcel = files.some(file => 
+                        file.name.toLowerCase().endsWith('.xlsx') || 
+                        file.name.toLowerCase().endsWith('.xls')
+                    );
+                    
+                    // Initialize thread_id if needed for Excel files
+                    if (hasExcel && !this.threadId) {
+                        this.threadId = uuid.v4();
+                        this.activeThreadId = this.threadId;
+                    }
+                    
+                    // Show uploading status for all files
+                    const uploadIndices = [];
+                    files.forEach(file => {
+                        const uploadIndex = this.messages.push({
+                            type: 'upload',
+                            content: `Uploading ${file.name}...`,
+                            status: 'uploading'
+                        }) - 1;
+                        uploadIndices.push({ index: uploadIndex, filename: file.name });
+                    });
                     
                     this.uploadingFile = true;
                     
                     try {
-                        // Create FormData
+                        // Create FormData with all files
                         const formData = new FormData();
-                        formData.append('file', file);
+                        files.forEach(file => {
+                            formData.append('files', file);
+                        });
                         formData.append('user_id', this.userId);
                         
-                        // For Excel files, session_id (thread_id) is required
-                        const isExcel = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls');
-                        if (isExcel) {
-                            // Initialize thread_id if not set
-                            if (!this.threadId) {
-                                this.threadId = uuid.v4();
-                                this.activeThreadId = this.threadId;
-                            }
+                        // Add session_id if we have Excel files
+                        if (hasExcel && this.threadId) {
                             formData.append('session_id', this.threadId);
                         }
                         
-                        // Upload file
+                        // Upload files
                         const response = await fetch('/api/v1/upload', {
                             method: 'POST',
                             body: formData
@@ -1026,29 +1038,64 @@ img, video {
                         
                         const result = await response.json();
                         
-                        // Update status message with success
-                        let successMessage = '';
-                        if (result.file_type === 'document') {
-                            successMessage = `✅ **${result.filename}** uploaded successfully!\n- Pages: ${result.page_count}\n- Document ID: ${result.doc_id}`;
-                        } else if (result.file_type === 'excel') {
-                            successMessage = `✅ **${result.filename}** uploaded successfully!\n- Table: ${result.table_name}\n- Rows: ${result.row_count}\n- Columns: ${result.column_count}`;
-                        } else {
-                            successMessage = `✅ **${result.filename}** uploaded successfully!`;
+                        // Update status messages for each file
+                        const resultMap = new Map();
+                        result.results.forEach((fileResult, idx) => {
+                            resultMap.set(fileResult.filename, fileResult);
+                        });
+                        
+                        // Update success messages
+                        uploadIndices.forEach(({ index, filename }) => {
+                            const fileResult = resultMap.get(filename);
+                            if (fileResult) {
+                                let successMessage = '';
+                                if (fileResult.file_type === 'document') {
+                                    successMessage = `✅ **${fileResult.filename}** uploaded successfully!\n- Pages: ${fileResult.page_count}\n- Document ID: ${fileResult.doc_id}`;
+                                } else if (fileResult.file_type === 'excel') {
+                                    successMessage = `✅ **${fileResult.filename}** uploaded successfully!\n- Table: ${fileResult.table_name}\n- Rows: ${fileResult.row_count}\n- Columns: ${fileResult.column_count}`;
+                                } else {
+                                    successMessage = `✅ **${fileResult.filename}** uploaded successfully!`;
+                                }
+                                this.$set(this.messages[index], 'content', marked.parse(successMessage));
+                                this.$set(this.messages[index], 'status', 'success');
+                            }
+                        });
+                        
+                        // Show error messages for failed files
+                        if (result.errors && result.errors.length > 0) {
+                            result.errors.forEach((error, idx) => {
+                                // Find the corresponding upload index
+                                const uploadItem = uploadIndices.find(item => item.filename === error.filename);
+                                if (uploadItem) {
+                                    const errorMessage = `❌ Failed to upload **${error.filename}**: ${error.error}`;
+                                    this.$set(this.messages[uploadItem.index], 'content', marked.parse(errorMessage));
+                                    this.$set(this.messages[uploadItem.index], 'status', 'error');
+                                }
+                            });
                         }
                         
-                        this.$set(this.messages[uploadIndex], 'content', marked.parse(successMessage));
-                        this.$set(this.messages[uploadIndex], 'status', 'success');
+                        // Show summary if multiple files
+                        if (files.length > 1) {
+                            const summaryIndex = this.messages.push({
+                                type: 'upload',
+                                content: `📊 **Upload Summary**: ${result.successful} successful, ${result.failed} failed out of ${result.total_files} files`,
+                                status: result.failed === 0 ? 'success' : 'error'
+                            }) - 1;
+                        }
                         
                         // Refresh threads list if this is a new thread
-                        if (isExcel && !this.activeThreadId) {
+                        if (hasExcel && !this.activeThreadId) {
                             await this.loadThreads();
                         }
                         
                     } catch (error) {
                         console.error('Upload error:', error);
-                        const errorMessage = `❌ Failed to upload **${file.name}**: ${error.message}`;
-                        this.$set(this.messages[uploadIndex], 'content', marked.parse(errorMessage));
-                        this.$set(this.messages[uploadIndex], 'status', 'error');
+                        // Mark all as failed
+                        uploadIndices.forEach(({ index, filename }) => {
+                            const errorMessage = `❌ Failed to upload **${filename}**: ${error.message}`;
+                            this.$set(this.messages[index], 'content', marked.parse(errorMessage));
+                            this.$set(this.messages[index], 'status', 'error');
+                        });
                     } finally {
                         this.uploadingFile = false;
                         this.$nextTick(() => this.scrollToBottom());

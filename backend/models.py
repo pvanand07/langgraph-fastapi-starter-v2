@@ -117,3 +117,12 @@ class CSVResponse(BaseModel):
     csv_data: str
     content_type: str = "text/csv"
 
+
+class MultiUploadResponse(BaseModel):
+    """Response for multiple file uploads."""
+    results: List[UnifiedUploadResponse]
+    total_files: int
+    successful: int
+    failed: int
+    errors: Optional[List[dict]] = None
+

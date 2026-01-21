@@ -13,6 +13,7 @@ dotenv.load_dotenv("secrets.env")
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
+from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -22,7 +23,7 @@ from config import HOST, PORT, DEBUG
 from models import (
     ChatInput, ThreadListResponse, ThreadResponse,
     MessageListResponse, MessageResponse, DocumentListResponse,
-    DocumentResponse, HealthResponse, UnifiedUploadResponse
+    DocumentResponse, HealthResponse, UnifiedUploadResponse, MultiUploadResponse
 )
 from server import ChatServer
 from memory_store import initialize_database
@@ -251,122 +252,161 @@ async def chat(input_data: ChatInput):
     )
 
 
-@app.post("/api/v1/upload", response_model=UnifiedUploadResponse)
+async def process_single_file(
+    file: UploadFile,
+    user_id: str,
+    session_id: Optional[str] = None
+) -> UnifiedUploadResponse:
+    """Process a single file upload."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail=f"No filename provided for file")
+    
+    filename_lower = file.filename.lower()
+    
+    # Read file bytes
+    file_bytes = await file.read()
+    
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail=f"Empty file: {file.filename}")
+    
+    # Route based on file type
+    if filename_lower.endswith(('.pdf', '.docx')):
+        # Handle PDF or DOCX documents
+        # Generate doc_id from filename
+        doc_id = document_store.generate_doc_id(file.filename)
+        
+        # Extract pages based on file type
+        if filename_lower.endswith('.pdf'):
+            pages = document_store.extract_pages_text_from_bytes(
+                pdf_bytes=file_bytes,
+                doc_id=doc_id,
+                user_id=user_id,
+                filename=file.filename
+            )
+        else:  # .docx
+            pages = document_store.extract_pages_text_from_docx_bytes(
+                docx_bytes=file_bytes,
+                doc_id=doc_id,
+                user_id=user_id,
+                filename=file.filename
+            )
+        
+        if not pages:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not extract text from {file.filename}. The document may be empty or contain only images."
+            )
+        
+        # Store pages
+        document_store.store_pages(
+            pages=pages,
+            user_id=user_id,
+            doc_id=doc_id,
+            doc_name=file.filename
+        )
+        
+        return UnifiedUploadResponse(
+            file_type="document",
+            message=f"Successfully stored {len(pages)} pages",
+            filename=file.filename,
+            doc_id=doc_id,
+            page_count=len(pages)
+        )
+    
+    elif filename_lower.endswith(('.xlsx', '.xls')):
+        # Handle Excel files
+        if not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="session_id is required for Excel file uploads"
+            )
+        
+        # Load Excel file into DuckDB
+        result = data_loader.load_excel_file(
+            excel_bytes=file_bytes,
+            filename=file.filename,
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        return UnifiedUploadResponse(
+            file_type="excel",
+            message=f"Successfully loaded {result['row_count']} rows into table {result['table_name']}",
+            filename=result['filename'],
+            table_name=result['table_name'],
+            row_count=result['row_count'],
+            column_count=result['column_count'],
+            columns=result['columns'],
+            metadata=result['metadata']
+        )
+    
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Only PDF, DOCX, and Excel (.xlsx, .xls) files are supported"
+        )
+
+
+@app.post("/api/v1/upload", response_model=MultiUploadResponse)
 async def upload_file(
     user_id: str = Form(...),
     session_id: Optional[str] = Form(None, description="Session ID (required for Excel files)"),
-    file: UploadFile = File(...)
+    files: List[UploadFile] = File(...)
 ):
     """
-    Unified file upload endpoint supporting PDF, DOCX, and Excel files.
+    Unified file upload endpoint supporting multiple PDF, DOCX, and Excel files.
     
     Accepts:
     - user_id: User ID (required)
     - session_id: Session ID (required for Excel files, optional for documents)
-    - file: File to upload (.pdf, .docx, .xlsx, .xls)
+    - files: One or more files to upload (.pdf, .docx, .xlsx, .xls)
     
     Returns:
-    - For PDF/DOCX: Document ID and page count
-    - For Excel: Table name, row count, column count, and metadata
+    - List of upload results with success/failure status for each file
+    - Summary of total, successful, and failed uploads
     """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
     
-    filename_lower = file.filename.lower()
+    results = []
+    errors = []
+    successful = 0
+    failed = 0
     
-    try:
-        # Read file bytes
-        file_bytes = await file.read()
-        
-        if not file_bytes:
-            raise HTTPException(status_code=400, detail="Empty file")
-        
-        # Route based on file type
-        if filename_lower.endswith(('.pdf', '.docx')):
-            # Handle PDF or DOCX documents
-            # Generate doc_id from filename
-            doc_id = document_store.generate_doc_id(file.filename)
-            
-            # Extract pages based on file type
-            if filename_lower.endswith('.pdf'):
-                pages = document_store.extract_pages_text_from_bytes(
-                    pdf_bytes=file_bytes,
-                    doc_id=doc_id,
-                    user_id=user_id,
-                    filename=file.filename
-                )
-            else:  # .docx
-                pages = document_store.extract_pages_text_from_docx_bytes(
-                    docx_bytes=file_bytes,
-                    doc_id=doc_id,
-                    user_id=user_id,
-                    filename=file.filename
-                )
-            
-            if not pages:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Could not extract text from {file.filename}. The document may be empty or contain only images."
-                )
-            
-            # Store pages
-            document_store.store_pages(
-                pages=pages,
-                user_id=user_id,
-                doc_id=doc_id,
-                doc_name=file.filename
-            )
-            
-            return UnifiedUploadResponse(
-                file_type="document",
-                message=f"Successfully stored {len(pages)} pages",
-                filename=file.filename,
-                doc_id=doc_id,
-                page_count=len(pages)
-            )
-        
-        elif filename_lower.endswith(('.xlsx', '.xls')):
-            # Handle Excel files
-            if not session_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="session_id is required for Excel file uploads"
-                )
-            
-            # Load Excel file into DuckDB
-            result = data_loader.load_excel_file(
-                excel_bytes=file_bytes,
-                filename=file.filename,
-                user_id=user_id,
-                session_id=session_id
-            )
-            
-            return UnifiedUploadResponse(
-                file_type="excel",
-                message=f"Successfully loaded {result['row_count']} rows into table {result['table_name']}",
-                filename=result['filename'],
-                table_name=result['table_name'],
-                row_count=result['row_count'],
-                column_count=result['column_count'],
-                columns=result['columns'],
-                metadata=result['metadata']
-            )
-        
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported file type. Only PDF, DOCX, and Excel (.xlsx, .xls) files are supported"
-            )
+    for file in files:
+        try:
+            result = await process_single_file(file, user_id, session_id)
+            results.append(result)
+            successful += 1
+        except HTTPException as e:
+            failed += 1
+            errors.append({
+                "filename": file.filename or "unknown",
+                "error": e.detail,
+                "status_code": e.status_code
+            })
+            logger.error(f"Error uploading file {file.filename}: {e.detail}")
+        except Exception as e:
+            failed += 1
+            error_msg = str(e)
+            errors.append({
+                "filename": file.filename or "unknown",
+                "error": error_msg,
+                "status_code": 500
+            })
+            logger.error(f"Error uploading file {file.filename}: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            await file.close()
     
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error uploading file: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
-    finally:
-        await file.close()
+    return MultiUploadResponse(
+        results=results,
+        total_files=len(files),
+        successful=successful,
+        failed=failed,
+        errors=errors if errors else None
+    )
 
 
 @app.get("/api/v1/metadata-csv")
