@@ -3,6 +3,7 @@
 import os
 import re
 import uuid
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
@@ -60,10 +61,12 @@ class Document(Base):
     doc_id = Column(Text, nullable=False)
     doc_name = Column(Text, nullable=False)
     page_count = Column(Integer, nullable=False, default=0)
+    file_hash = Column(Text, nullable=True)  # SHA256 hash of file content
     created_at = Column(Text, nullable=False, default="")
     
     __table_args__ = (
         Index('ix_user_doc', 'user_id', 'doc_id', unique=True),
+        Index('ix_user_hash', 'user_id', 'file_hash'),  # Index for duplicate checking
     )
 
 
@@ -88,6 +91,62 @@ def create_tables():
                 )
             """))
             conn.commit()
+        
+        # Migrate: Add file_hash column to document table if it doesn't exist
+        try:
+            doc_table_result = conn.execute(text("""
+                SELECT sql FROM sqlite_master 
+                WHERE type='table' AND name='document'
+            """)).fetchone()
+            
+            if doc_table_result and 'file_hash' not in doc_table_result[0].lower():
+                # Add file_hash column
+                conn.execute(text("""
+                    ALTER TABLE document ADD COLUMN file_hash TEXT
+                """))
+                # Add index for user_id and file_hash
+                try:
+                    conn.execute(text("""
+                        CREATE INDEX ix_user_hash ON document(user_id, file_hash)
+                    """))
+                except Exception:
+                    # Index might already exist, ignore
+                    pass
+                conn.commit()
+        except Exception:
+            # Column might already exist or table doesn't exist yet
+            # This is fine, Base.metadata.create_all will handle it
+            pass
+
+
+def calculate_file_hash(file_bytes: bytes) -> str:
+    """Calculate SHA256 hash of file bytes."""
+    return hashlib.sha256(file_bytes).hexdigest()
+
+
+def check_duplicate_file(user_id: str, file_hash: str) -> Optional[Dict]:
+    """
+    Check if a file with the same hash already exists for the user.
+    
+    Returns:
+        Dict with doc_id, doc_name if duplicate found, None otherwise
+    """
+    create_tables()
+    
+    with SessionLocal() as db:
+        existing_doc = db.query(Document).filter(
+            and_(Document.user_id == user_id, Document.file_hash == file_hash)
+        ).first()
+        
+        if existing_doc:
+            return {
+                "doc_id": existing_doc.doc_id,
+                "doc_name": existing_doc.doc_name,
+                "page_count": existing_doc.page_count,
+                "created_at": existing_doc.created_at
+            }
+    
+    return None
 
 
 def generate_doc_id(filename: str) -> str:
@@ -243,7 +302,7 @@ def extract_pages_text_from_docx_bytes(docx_bytes: bytes, doc_id: str, user_id: 
     return pages
 
 
-def store_pages(pages: List[Dict], user_id: str, doc_id: str, doc_name: str):
+def store_pages(pages: List[Dict], user_id: str, doc_id: str, doc_name: str, file_hash: Optional[str] = None):
     """Store pages and document metadata in SQLite."""
     create_tables()
     
@@ -290,6 +349,7 @@ def store_pages(pages: List[Dict], user_id: str, doc_id: str, doc_name: str):
                     doc_id=doc_id,
                     doc_name=doc_name,
                     page_count=len(pages),
+                    file_hash=file_hash,
                     created_at=datetime.utcnow().isoformat()
                 )
                 db.add(doc)
@@ -311,6 +371,7 @@ def list_documents(user_id: str) -> List[Dict]:
                 "doc_name": doc.doc_name,
                 "user_id": doc.user_id,
                 "page_count": doc.page_count,
+                "file_hash": doc.file_hash,
                 "created_at": doc.created_at
             }
             for doc in docs

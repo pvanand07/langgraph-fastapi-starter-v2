@@ -61,6 +61,7 @@ class DocumentResponse(BaseModel):
     doc_name: str
     user_id: str
     page_count: int
+    file_hash: Optional[str] = None
     created_at: str
 
 

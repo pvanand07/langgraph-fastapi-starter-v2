@@ -271,6 +271,17 @@ async def process_single_file(
     
     # Route based on file type
     if filename_lower.endswith(('.pdf', '.docx')):
+        # Calculate file hash
+        file_hash = document_store.calculate_file_hash(file_bytes)
+        
+        # Check for duplicate file (same hash for same user)
+        duplicate = document_store.check_duplicate_file(user_id, file_hash)
+        if duplicate:
+            raise HTTPException(
+                status_code=409,  # Conflict status code
+                detail=f"Skipping file '{file.filename}' as it already exists in the database"
+            )
+        
         # Handle PDF or DOCX documents
         # Generate doc_id from filename
         doc_id = document_store.generate_doc_id(file.filename)
@@ -297,12 +308,13 @@ async def process_single_file(
                 detail=f"Could not extract text from {file.filename}. The document may be empty or contain only images."
             )
         
-        # Store pages
+        # Store pages with file hash
         document_store.store_pages(
             pages=pages,
             user_id=user_id,
             doc_id=doc_id,
-            doc_name=file.filename
+            doc_name=file.filename,
+            file_hash=file_hash
         )
         
         return UnifiedUploadResponse(
@@ -319,6 +331,15 @@ async def process_single_file(
             raise HTTPException(
                 status_code=400,
                 detail="session_id is required for Excel file uploads"
+            )
+        
+        # Calculate file hash and check for duplicates
+        file_hash = document_store.calculate_file_hash(file_bytes)
+        duplicate = data_loader.check_duplicate_excel_file(user_id, file_hash, session_id)
+        if duplicate:
+            raise HTTPException(
+                status_code=409,  # Conflict status code
+                detail=f"Skipping file '{file.filename}' as it already exists in the database"
             )
         
         # Load Excel file into DuckDB
@@ -588,6 +609,7 @@ async def list_documents(user_id: str = Query(..., description="User ID")):
                 doc_name=doc["doc_name"],
                 user_id=doc["user_id"],
                 page_count=doc["page_count"],
+                file_hash=doc.get("file_hash"),
                 created_at=doc["created_at"]
             )
             for doc in docs

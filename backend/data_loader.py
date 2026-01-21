@@ -74,6 +74,48 @@ def generate_table_name(file_path: str) -> str:
     return table_name
 
 
+def calculate_file_hash(file_bytes: bytes) -> str:
+    """Calculate SHA256 hash of file bytes."""
+    return hashlib.sha256(file_bytes).hexdigest()
+
+
+def check_duplicate_excel_file(user_id: str, file_hash: str, session_id: Optional[str] = None) -> Optional[Dict]:
+    """
+    Check if an Excel file with the same hash already exists for the user.
+    
+    Args:
+        user_id: User ID
+        file_hash: SHA256 hash of the file
+        session_id: Optional session ID filter
+        
+    Returns:
+        Dict with table_name, filename if duplicate found, None otherwise
+    """
+    conn = get_connection()
+    
+    try:
+        query = "SELECT table_name, filename, source_file FROM metadata WHERE user_id = ? AND file_hash = ?"
+        params = [user_id, file_hash]
+        
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        
+        result = conn.execute(query, params).fetchdf()
+        
+        if not result.empty:
+            row = result.iloc[0]
+            return {
+                "table_name": row['table_name'],
+                "filename": row['filename'],
+                "source_file": row['source_file']
+            }
+    except Exception as e:
+        logger.warning("Error checking for duplicate Excel file: %s", e)
+    
+    return None
+
+
 def load_excel_to_dataframe(excel_bytes: bytes) -> Tuple[Dict[str, Any], pd.DataFrame]:
     """
     Load an Excel file from bytes and extract both metadata and data table.
@@ -191,6 +233,17 @@ def load_excel_file(
     conn = get_connection()
     
     try:
+        # Calculate file hash
+        file_hash = calculate_file_hash(excel_bytes)
+        
+        # Check for duplicate file (same hash for same user in same session)
+        duplicate = check_duplicate_excel_file(user_id, file_hash, session_id)
+        if duplicate:
+            raise ValueError(
+                f"File '{filename}' already exists as '{duplicate['filename']}' "
+                f"(table: {duplicate['table_name']})"
+            )
+        
         # Generate table name automatically
         table_name = generate_table_name(filename)
         
@@ -220,8 +273,8 @@ def load_excel_file(
         
         logger.info("Created DuckDB table: %s", table_name)
         
-        # Update metadata table
-        update_metadata_table(table_name, filename, metadata, len(df), len(df.columns))
+        # Update metadata table with file hash
+        update_metadata_table(table_name, filename, metadata, len(df), len(df.columns), file_hash)
         
         return {
             'table_name': table_name,
@@ -242,7 +295,8 @@ def update_metadata_table(
     source_file: str,
     metadata: Dict[str, Any],
     row_count: int,
-    column_count: int
+    column_count: int,
+    file_hash: Optional[str] = None
 ):
     """Create or update the metadata table in DuckDB."""
     conn = get_connection()
@@ -270,12 +324,25 @@ def update_metadata_table(
                 user_id VARCHAR,
                 session_id VARCHAR,
                 filename VARCHAR,
+                file_hash VARCHAR,
                 row_count INTEGER,
                 column_count INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         logger.info("Created metadata table")
+    else:
+        # Check if file_hash column exists, if not add it
+        try:
+            # Try to select file_hash to see if column exists
+            conn.execute("SELECT file_hash FROM metadata LIMIT 1").fetchone()
+        except Exception:
+            # Column doesn't exist, add it
+            try:
+                conn.execute("ALTER TABLE metadata ADD COLUMN file_hash VARCHAR")
+                logger.info("Added file_hash column to metadata table")
+            except Exception as e:
+                logger.warning("Could not add file_hash column (might already exist): %s", e)
     
     # Insert or replace metadata row
     conn.execute(
@@ -283,8 +350,8 @@ def update_metadata_table(
         INSERT INTO metadata (
             table_name, source_file, name, address, report_title, client,
             date_range, from_date, to_date, user_id, session_id, filename,
-            row_count, column_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            file_hash, row_count, column_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             table_name,
@@ -299,6 +366,7 @@ def update_metadata_table(
             metadata.get('user_id'),
             metadata.get('session_id'),
             metadata.get('filename'),
+            file_hash,
             row_count,
             column_count
         ]
@@ -535,12 +603,25 @@ def initialize_database():
                 user_id VARCHAR,
                 session_id VARCHAR,
                 filename VARCHAR,
+                file_hash VARCHAR,
                 row_count INTEGER,
                 column_count INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         logger.info("Initialized DuckDB metadata table")
+    else:
+        # Check if file_hash column exists, if not add it
+        try:
+            # Try to select file_hash to see if column exists
+            conn.execute("SELECT file_hash FROM metadata LIMIT 1").fetchone()
+        except Exception:
+            # Column doesn't exist, add it
+            try:
+                conn.execute("ALTER TABLE metadata ADD COLUMN file_hash VARCHAR")
+                logger.info("Added file_hash column to metadata table")
+            except Exception as e:
+                logger.warning("Could not add file_hash column (might already exist): %s", e)
     
     # Create view_metadata table if it doesn't exist
     try:
