@@ -92,32 +92,6 @@ def create_tables():
             """))
             conn.commit()
         
-        # Migrate: Add file_hash column to document table if it doesn't exist
-        try:
-            doc_table_result = conn.execute(text("""
-                SELECT sql FROM sqlite_master 
-                WHERE type='table' AND name='document'
-            """)).fetchone()
-            
-            if doc_table_result and 'file_hash' not in doc_table_result[0].lower():
-                # Add file_hash column
-                conn.execute(text("""
-                    ALTER TABLE document ADD COLUMN file_hash TEXT
-                """))
-                # Add index for user_id and file_hash
-                try:
-                    conn.execute(text("""
-                        CREATE INDEX ix_user_hash ON document(user_id, file_hash)
-                    """))
-                except Exception:
-                    # Index might already exist, ignore
-                    pass
-                conn.commit()
-        except Exception:
-            # Column might already exist or table doesn't exist yet
-            # This is fine, Base.metadata.create_all will handle it
-            pass
-
 
 def calculate_file_hash(file_bytes: bytes) -> str:
     """Calculate SHA256 hash of file bytes."""

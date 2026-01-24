@@ -211,29 +211,40 @@ async def create_thread(
     }
 
 
-async def update_thread(thread_id: str, title: Optional[str] = None) -> Dict[str, Any]:
-    """Update thread metadata."""
+async def update_thread(thread_id: str, user_id: str, title: Optional[str] = None) -> Dict[str, Any]:
+    """Update thread metadata with user verification."""
     conn = await get_db_connection()
     now = datetime.utcnow().isoformat()
     
+    # Verify thread belongs to user
+    cursor = await conn.execute(
+        "SELECT id FROM threads WHERE id = ? AND user_id = ?",
+        (thread_id, user_id)
+    )
+    row = await cursor.fetchone()
+    
+    if not row:
+        raise NotFoundError(f"Thread {thread_id} not found for user {user_id}")
+    
+    # Update thread title
     await conn.execute("""
         UPDATE threads 
-        SET title = COALESCE(?, title),
+        SET title = ?,
             updated_at = ?
-        WHERE id = ?
-    """, (title, now, thread_id))
+        WHERE id = ? AND user_id = ?
+    """, (title, now, thread_id, user_id))
     
     await conn.commit()
     
     # Get updated thread
     cursor = await conn.execute(
-        "SELECT id, user_id, title, created_at, updated_at FROM threads WHERE id = ?",
-        (thread_id,)
+        "SELECT id, user_id, title, created_at, updated_at FROM threads WHERE id = ? AND user_id = ?",
+        (thread_id, user_id)
     )
     row = await cursor.fetchone()
     
     if not row:
-        raise NotFoundError(f"Thread {thread_id} not found")
+        raise NotFoundError(f"Thread {thread_id} not found for user {user_id}")
     
     return {
         "id": row[0],

@@ -23,7 +23,8 @@ from config import HOST, PORT, DEBUG
 from models import (
     ChatInput, ThreadListResponse, ThreadResponse,
     MessageListResponse, MessageResponse, DocumentListResponse,
-    DocumentResponse, HealthResponse, UnifiedUploadResponse, MultiUploadResponse
+    DocumentResponse, HealthResponse, UnifiedUploadResponse, MultiUploadResponse,
+    RenameThreadRequest
 )
 from server import ChatServer
 from memory_store import initialize_database
@@ -595,6 +596,34 @@ async def delete_thread(thread_id: str, user_id: str = Query(..., description="U
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting thread: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/v1/threads/{thread_id}/rename", response_model=ThreadResponse)
+async def rename_thread(
+    thread_id: str,
+    request: RenameThreadRequest,
+    user_id: str = Query(..., description="User ID")
+):
+    """Rename a conversation thread by updating its title."""
+    try:
+        result = await frontend_store.update_thread(
+            thread_id=thread_id,
+            user_id=user_id,
+            title=request.title
+        )
+        
+        return ThreadResponse(
+            id=result["id"],
+            user_id=result["user_id"],
+            title=result["title"],
+            created_at=datetime.fromisoformat(result["created_at"]),
+            updated_at=datetime.fromisoformat(result["updated_at"])
+        )
+    except frontend_store.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error renaming thread: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
