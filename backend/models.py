@@ -38,6 +38,11 @@ class ThreadListResponse(BaseModel):
     after: Optional[str] = None
 
 
+class RenameThreadRequest(BaseModel):
+    """Request model for renaming a thread."""
+    title: str = Field(..., description="New thread title", min_length=1)
+
+
 class MessageResponse(BaseModel):
     """Message response model."""
     id: str

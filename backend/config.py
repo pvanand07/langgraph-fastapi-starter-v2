@@ -5,7 +5,7 @@ from pathlib import Path
 
 # Default model configuration (matching IResearcher-v5 OpenRouter setup)
 DEFAULT_MODEL_CONFIG = {
-    "model": "openai/gpt-5.1",
+    "model": "openai/gpt-5.1:thinking",
     "streaming": True,
     "temperature": 0.1,
     "base_url": "https://openrouter.ai/api/v1",

@@ -115,6 +115,6 @@ Here is how the AI agent should interpret and answer complex natural language qu
 
 1. **Date Alignment:** Always verify `metadata` date ranges before performing Joins. In your example, comparing `product_summary` (2024-25) with `party_wise_summary` (2025) will lead to wrong conclusions.
 2. **Unit Standardization:** `product_purchase` uses "Quantity" (often Cases), while summaries might use "Kg" or "Units". The agent must use the `Case Size` column in `product_summary` to normalize units.
-3. **Entity Resolution:** String matching is required. "5 STAR" in one table might be "5STAR" or "Cadbury 5 Star" in another. Use fuzzy matching on `Product Name`.
+3. **Entity Resolution:** String matching is required. "5 STAR" in one table might be "5STAR" or "Cadbury 5 Star" in another. Use fuzzy matching on both `Product Name` and `Party` columns.
 
 """
