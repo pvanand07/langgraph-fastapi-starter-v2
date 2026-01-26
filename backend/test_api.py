@@ -325,6 +325,7 @@ Provide a score from 0-100 where:
             "source": test_case.source,
             "rationale": test_case.rationale,
             "complexity": test_case.complexity,
+            "category": test_case.category,
             "passed": False,
             "judge_score": 0,
             "judge_reasoning": "",
@@ -366,7 +367,7 @@ Provide a score from 0-100 where:
         
         return result
     
-    def run_all_tests(self, test_cases: List[TestCase], output_dir: str = "test_results", output_file: Optional[str] = None) -> Dict:
+    def run_all_tests(self, test_cases: List[TestCase], output_dir: str = "test_results", output_file: Optional[str] = None, json_file: Optional[str] = None) -> Dict:
         """Run all test cases and generate a summary report."""
         print("="*80)
         print("CHAT API TEST SUITE")
@@ -391,14 +392,14 @@ Provide a score from 0-100 where:
             self.results.append(result)
             
             # Save incrementally after each test
-            self.save_results(output_dir=output_dir, filename=output_file, show_message=False)
+            self.save_results(output_dir=output_dir, filename=output_file, json_file=json_file, show_message=False)
             print(f"💾 Progress saved ({i}/{len(test_cases)} tests completed)")
             
             time.sleep(1)  # Small delay between requests
         
         # Generate and save final summary
         summary = self.generate_summary()
-        self.save_results(output_dir=output_dir, filename=output_file, show_message=True)
+        self.save_results(output_dir=output_dir, filename=output_file, json_file=json_file, show_message=True)
         return summary
     
     def generate_summary(self) -> Dict:
@@ -452,13 +453,14 @@ Provide a score from 0-100 where:
         
         return summary
     
-    def save_results(self, output_dir: str = "test_results", filename: Optional[str] = None, show_message: bool = True):
+    def save_results(self, output_dir: str = "test_results", filename: Optional[str] = None, json_file: Optional[str] = None, show_message: bool = True):
         """
         Save test results to a JSON file with timestamp.
         
         Args:
             output_dir: Directory to save results in (default: test_results)
             filename: Optional custom filename. If not provided, uses timestamp.
+            json_file: Name of the JSON test file to include in output filename.
             show_message: Whether to print save confirmation message (default: True)
         """
         # Create output directory if it doesn't exist
@@ -469,7 +471,13 @@ Provide a score from 0-100 where:
         # Generate filename with timestamp if not provided
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"test_results_{timestamp}.json"
+            
+            # Extract base name from json_file if provided
+            if json_file:
+                json_basename = os.path.splitext(os.path.basename(json_file))[0]
+                filename = f"test_results_{json_basename}_{timestamp}.json"
+            else:
+                filename = f"test_results_{timestamp}.json"
         
         # Store the filepath for reuse in incremental saves
         if not hasattr(self, '_output_filepath'):
@@ -596,7 +604,7 @@ def main():
             test_case = matching_tests[0]
             result = tester.run_test_case(test_case, args.test_number)
             tester.results = [result]
-            tester.save_results(output_dir=args.output_dir, filename=args.output_file, show_message=True)
+            tester.save_results(output_dir=args.output_dir, filename=args.output_file, json_file=args.json_file, show_message=True)
         else:
             print(f"❌ Test with ID {args.test_number} not found")
             if args.complexity:
@@ -605,7 +613,7 @@ def main():
         # Run all tests (or filtered by complexity)
         if args.complexity:
             print(f"🔍 Filtering tests by complexity: {args.complexity}")
-        tester.run_all_tests(test_cases, output_dir=args.output_dir, output_file=args.output_file)
+        tester.run_all_tests(test_cases, output_dir=args.output_dir, output_file=args.output_file, json_file=args.json_file)
 
 
 if __name__ == "__main__":
