@@ -1,0 +1,201 @@
+{
+  "test_cases": [
+    {
+      "id": 1,
+      "complexity": "Simple",
+      "question": "What year was Marwa Enterprises established?",
+      "expected_answer": "2016",
+      "source": "MARWA ENTERPRISES-Profile.docx, Section: 'About Us', Paragraph 1.",
+      "category": "Company Information"
+    },
+    {
+      "id": 2,
+      "complexity": "Simple",
+      "question": "What is the recorded purchase amount for the product \"BOURNVILLE 70% RICH COCOA 75G PRC\" with Product Code 4328459?",
+      "expected_answer": "7,253.19",
+      "source": "All Product Purchase Report.xlsx, Sheet3, Row 3, Column: Amount.",
+      "category": "Product Purchase Data"
+    },
+    {
+      "id": 3,
+      "complexity": "Simple",
+      "question": "On April 1st, 2025, what was the bill amount for \"ZAINA BAKERY AND BIRIYANI HOUSE\"?",
+      "expected_answer": "12,296",
+      "source": "Salesman Wise PARTY Wise Summary 1-04-2025 to 28-11-25.xlsx, Sheet3, Row 1, Column: Amount.",
+      "category": "Sales Data"
+    },
+    {
+      "id": 4,
+      "complexity": "Simple",
+      "question": "According to the company profile, what is the guaranteed timeframe for \"Local deliveries\" under the Service Level Agreements (SLAs)?",
+      "expected_answer": "Within 24 hours of order confirmation.",
+      "source": "MARWA ENTERPRISES-Profile.docx, Section: \"Service Level Agreements (SLAs)\", Point 1.",
+      "category": "Company Information"
+    },
+    {
+      "id": 5,
+      "complexity": "Simple",
+      "question": "What is the total amount recorded for the product \"5STAR HTS 151.5G\"?",
+      "expected_answer": "13,529.07",
+      "source": "Salesman Wise Product Summary.xlsx, Sheet3, Row 1, Column: Total Amt.",
+      "category": "Product Sales Data"
+    },
+    {
+      "id": 6,
+      "complexity": "Medium",
+      "question": "Which \"Bournville\" product variant listed in the Purchase Report has the highest individual transaction amount, and what is that amount?",
+      "expected_answer": "BOURNVILLE 70% RICH COCOA 75G PRC and BOURNVILLE 70% RICH COCOA RS.150 75G-PRE both of which has a per unit amount of 120.88",
+      "rationale": "Total amount / Quantity ( 7253.19 / 60)",
+      "source": "All Product Purchase Report.xlsx, Sheet3, Row 17 and 18",
+      "category": "Product Analysis"
+    },
+    {
+      "id": 7,
+      "complexity": "Medium",
+      "question": "Calculate the total sales revenue generated from \"Amal Palace Bakery\" for the month of April 2025 based on the provided sales summary.",
+      "expected_answer": "90,064",
+      "rationale": "Calculated: 14,576 + 9,447 + 27,031 + 14,273 + 24737",
+      "source": "Salesman Wise PARTY Wise Summary 1-04-2025 to 28-11-25.xlsx.",
+      "category": "Sales Calculation"
+    },
+    {
+      "id": 8,
+      "complexity": "Medium",
+      "question": "Compare the sales volume (Quantity) of \"CDM 21G RS.20\" versus \"CDM 23G RS.20\". Which product sold more units?",
+      "expected_answer": "CDM 23G RS.20 sold more units (78,302) compared to CDM 21G RS.20 (20,350).",
+      "source": "Salesman Wise Product Summary.xlsx, Rows 97 and 98.",
+      "category": "Product Comparison"
+    },
+    {
+      "id": 9,
+      "complexity": "Medium",
+      "question": "Identify the Core Values of Marwa Enterprises as listed in their profile.",
+      "expected_answer": "Integrity, Reliability, Customer Focus, Operational Excellence, and Commitment.",
+      "rationale": "The model must extract the list from the 'Core Values' section of the document.",
+      "source": "MARWA ENTERPRISES-Profile.docx, Section: \"Core Values\".",
+      "category": "Company Information"
+    },
+    {
+      "id": 10,
+      "complexity": "Medium",
+      "question": "How many different bills were generated for \"MOOLANS FAMILY MART\" (including Margin Free Market) on April 4th, 2025?",
+      "expected_answer": "2 bills.",
+      "source": "Salesman Wise PARTY Wise Summary 1-04-2025 to 28-11-25.xlsx, Rows 71 and 73.",
+      "category": "Sales Data"
+    },
+    {
+      "id": 11,
+      "complexity": "Medium",
+      "question": "According to the \"Distributor Supply Chain\" analysis provided, which specific table acts as the \"Source of Truth\" for inventory cost, and who is the \"Principal\" listed in that table?",
+      "expected_answer": "Table: All Product Purchase Report (referred to as product_purchase in the analysis). Principal: MONDELEZ INDIA FOODS LTD.",
+      "rationale": "Part 1: The 'Source of Truth' Table - Under the section '1. Inbound Logistics (The Buy Side)', the text states: 'Key Relationship: This is the source of truth for inventory cost and availability.' Part 2: The Principal - Found in Header Section (Row 5) of All Product Purchase Report.xlsx: 'Company :MONDELEZ INDIA FOODS LTD'",
+      "source": "User Context ('Inbound Logistics' section) + All Product Purchase Report.xlsx, Header Row 5.",
+      "category": "Supply Chain Analysis"
+    },
+    {
+      "id": 12,
+      "complexity": "Medium",
+      "question": "The Supply Chain analysis mentions a \"Distribution Width\" metric found in the product_summary table. What is the distribution width (Outlet count) for \"BOURNVILLE 70% RS.120\"?",
+      "expected_answer": "32 Outlets.",
+      "source": "Salesman Wise Product Summary.xlsx, Row 15, Column: Outlet(s).",
+      "category": "Supply Chain Analysis"
+    },
+    {
+      "id": 13,
+      "complexity": "Medium",
+      "question": "How does the \"Operating Hours\" in the Company Profile constraint the \"Outbound Logistics\" flow described in the analysis?",
+      "expected_answer": "The 'Outbound Logistics' (Sales/Delivery) are constrained to Monday to Saturday — 9:00 AM to 6:00 PM.",
+      "rationale": "Connecting the Profile document (operational constraints) to the Abstract Supply Chain text (logistics flow).",
+      "source": "MARWA ENTERPRISES-Profile.docx (Operating Hours) + User Context (Outbound Logistics).",
+      "category": "Supply Chain Analysis"
+    },
+    {
+      "id": 14,
+      "complexity": "Complex",
+      "question": "Based on the \"Vision Statement\" in the profile, which customer segment (Retail vs. Wholesale) appears to be the primary revenue driver in the Salesman Wise PARTY Wise Summary?",
+      "expected_answer": "Wholesale/Supermarkets appear to be the driver (e.g., Moolans Family Mart, Royal Food Court), aligning with the vision to be a \"distribution partner... for retail and wholesale partners.\"",
+      "rationale": "The model must analyze the high-value transactions in the Excel file (e.g., Moolans ~70k, Royal Food Court ~50k) and map them to the \"Wholesale/Supermarket\" categories mentioned in the Vision Statement.",
+      "source": "Cross-reference MARWA ENTERPRISES-Profile.docx (Vision) and Salesman Wise PARTY Wise Summary... (High-value rows).",
+      "category": "Cross-Referencing & Analysis"
+    },
+    {
+      "id": 15,
+      "complexity": "Complex",
+      "question": "Identify the date with the highest total sales volume in April 2025 by aggregating all bills for that day.",
+      "expected_answer": "April 4th, 2025 (Total approx > 398,000).",
+      "rationale": "The model must group rows by Date in the Party Summary file, sum the \"Amount\" column for each date in April, and identify the peak. (04/04 has multiple high-value bills: 70k, 60k, 49k, etc.).",
+      "source": "Salesman Wise PARTY Wise Summary 1-04-2025 to 28-11-25.xlsx, Rows 65-96.",
+      "category": "Data Aggregation & Analysis"
+    },
+    {
+      "id": 16,
+      "complexity": "Complex",
+      "question": "Analyze the 'Salesman Wise Product Summary' to determine the 'Drop Size Efficiency' for the top-selling product, CDM 23G RS.20. Calculate the average number of units sold per bill (Total QTY / Bills). Does this figure suggest that this item is primarily a 'loose impulse buy' or a 'bulk stock-up' item for retailers?",
+      "expected_answer": "Calculation: 78,302 (QTY) / 3,138 (Bills) ≈ 24.95 units/bill. Since 25 units is close to a standard box/outer size (typically 24 or 30 for chocolates), this suggests retailers are buying in Bulk / Full Outer Packs, not single units.",
+      "rationale": "This questions moves beyond simple retrieval to \"derived metrics\" (Average Units per Transaction) and requires business context interpretation (Impulse vs. Bulk).",
+      "source": "Salesman Wise Product Summary.xlsx, Row 98 (QTY: 78,302 | Bills: 3,138).",
+      "category": "Business Analysis & Interpretation"
+    },
+    {
+      "id": 17,
+      "complexity": "Extremely Complex",
+      "question": "Analyze the Salesman Wise Product Summary to determine the revenue concentration. Do the top 5 products contribute to more than 20% of the total revenue shown in the first 20 rows?",
+      "expected_answer": "Yes, significantly more. The top 5 products contribute approximately 49.7% of the total revenue generated by the first 20 items. This indicates a high revenue concentration where a quarter of the products drive half of the sales value.",
+      "rationale": "Exploratory analysis of revenue distribution (Pareto principle application). Total Revenue (Rows 1-20): 196,857.76. Top 5 Revenue Contributors: Row 20 (26,104.77), Row 19 (24,175.29), Row 11 (16,646.48), Row 18 (15,980.62), Row 6 (14,981.85). Sum of Top 5: 97,889.01. Percentage: 97,889.01 / 196,857.76 = 49.73%.",
+      "source": "Salesman Wise Product Summary.xlsx, Rows 1-20.",
+      "category": "Exploratory Analysis"
+    },
+    {
+      "id": 18,
+      "complexity": "Extremely Complex",
+      "question": "Based on the purchase frequency of 'Amal Palace Bakery' in April 2025 (orders on 01/04, 08/04, 15/04, 22/04, 29/04), predict the next likely order date and estimate the order value using a simple average of April's orders.",
+      "expected_answer": "Predicted Next Order Date: May 6th, 2025. Estimated Order Value: ₹18,013 (Rounded from 18,012.80).",
+      "rationale": "Time-series pattern recognition (weekly cycle) and simple moving average for value prediction. Pattern: Weekly cycle (every Tuesday). Dates: 01/04/2025 (Tuesday), 08/04/2025 (Tuesday), 15/04/2025 (Tuesday), 22/04/2025 (Tuesday), 29/04/2025 (Tuesday). Next date: 29/04/2025 + 7 days = 06/05/2025. Value calculation: (14,576 + 9,447 + 27,031 + 14,273 + 24,737) / 5 = 90,064 / 5 = 18,012.80.",
+      "source": "Salesman Wise PARTY Wise Summary 1-04-2025 to 28-11-25.xlsx, April rows for Amal Palace.",
+      "category": "Predictive Analysis"
+    },
+    {
+      "id": 19,
+      "complexity": "Extremely Complex",
+      "question": "Examine the 'All Product Purchase Report'. Group the 'BOURNVILLE' products by chocolate type (Dark/Rich Cocoa vs. Fruit & Nut/Cranberry). Which category has a higher total purchase investment?",
+      "expected_answer": "The Dark / Rich Cocoa category has a higher total purchase investment compared to the Fruit & Nut/Cranberry category. Dark / Rich Cocoa Total: ₹96,008.25. Fruit & Nut / Cranberry Total: ₹74,345.75. Winner: Dark / Rich Cocoa (by a margin of ₹21,662.50).",
+      "rationale": "Categorization and aggregation of data subsets. Dark/Rich Cocoa includes products explicitly named \"Rich Cocoa\" or \"Dark\", and products labeled \"RC\" (abbreviation for \"Rich Cocoa\"). Fruit & Nut/Cranberry includes all variant bars with inclusions, such as \"Fruit & Nut\", \"Cranberry\", and \"Rum & Raisin\".",
+      "source": "All Product Purchase Report.xlsx, Rows 1-20.",
+      "category": "Categorization & Aggregation"
+    },
+    {
+      "id": 20,
+      "complexity": "Extremely Complex",
+      "question": "In the Salesman Wise Product Summary, perform a 'Trade Spend Efficiency Analysis' for the '5STAR' brand portfolio. Identify the Top 3 '5STAR' SKUs based on Total Amt (Revenue). Calculate the 'Promotional Efficiency Ratio' for each of these three products using the formula: Revenue / Discount. Which specific SKU provides the highest return on discount investment, and how many times more efficient is it compared to the #1 top-selling SKU?",
+      "expected_answer": "Top 3 '5STAR' SKUs (by Revenue): 5STAR HTS 151.5G (Revenue: ₹13,529.07), 5STAR HTS 191.9G (Revenue: ₹5,411.62), 5STAR KITTED PACK 108G (Revenue: ₹4,358.35). Efficiency Ratios: HTS 151.5G: ~8.03, HTS 191.9G: ~6.76, KITTED PACK: ~80.00. The \"5STAR KITTED PACK\" is the most efficient revenue generator. It is approximately 10 times more efficient (80.00 / 8.03 ≈ 9.96) than the top-selling SKU (HTS 151.5G).",
+      "rationale": "Financial optimization analysis. The Kitted Pack brings in the most efficient revenue with minimal trade spend leakage, while HTS 151.5G brings in the most volume but requires heavier discounting.",
+      "source": "Salesman Wise Product Summary.xlsx (Sheet3), Rows 8, 9, & 11 (Sr. No 1, 2, & 4).",
+      "category": "Financial Optimization"
+    }
+  ],
+  "summary": {
+    "total_questions": 20,
+    "simple_complexity": 5,
+    "medium_complexity": 8,
+    "complex_complexity": 3,
+    "extremely_complex_complexity": 4,
+    "categories": [
+      "Company Information",
+      "Product Purchase Data",
+      "Sales Data",
+      "Product Sales Data",
+      "Product Analysis",
+      "Sales Calculation",
+      "Product Comparison",
+      "Supply Chain Analysis",
+      "Cross-Referencing & Analysis",
+      "Data Aggregation & Analysis",
+      "Business Analysis & Interpretation",
+      "Exploratory Analysis",
+      "Predictive Analysis",
+      "Categorization & Aggregation",
+      "Financial Optimization"
+    ]
+  }
+}
+
