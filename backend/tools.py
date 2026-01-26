@@ -3,11 +3,13 @@
 import logging
 import re
 import uuid
-import json
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
+from io import StringIO
 from typing import Optional, List, Tuple, Dict, Any
 from langchain.tools import tool, ToolRuntime
+from IPython.core.interactiveshell import InteractiveShell
 import pandas as pd
 import plotly.express as px
 import document_store
@@ -472,8 +474,185 @@ async def create_visualization(
         return (error_msg, None)
 
 
+@tool(response_format="content_and_artifact")
+async def execute_python(
+    python_code: str,
+    runtime: ToolRuntime[ChatContext],
+    sql_query: Optional[str] = None
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Execute Python code with optional SQL query to load data into a DataFrame.
+    
+    This tool allows you to execute arbitrary Python code. If a SQL query is provided,
+    it will be executed first to load data into a DataFrame named 'df'. The Python code
+    can then use this DataFrame along with other available libraries (pandas, plotly, etc.).
+    
+    Args:
+        python_code: Python code string to execute
+        runtime: ToolRuntime containing user context
+        sql_query: Optional SQL query to load data into a DataFrame named 'df'
+    
+    Returns:
+        Tuple of (content_string, artifacts_dict) with execution results.
+        The output includes stdout and any return value from the code execution.
+    
+    Examples:
+        - python_code: "print('Hello, World!')", sql_query: None
+        - python_code: "print(df.head())", sql_query: "SELECT * FROM table_name LIMIT 10"
+        - python_code: "result = df.describe()\nprint(result)", sql_query: "SELECT * FROM sales_data"
+    """
+    writer = runtime.stream_writer
+    user_id = runtime.context.user_id
+    session_id = runtime.context.thread_id
+    
+    writer("Preparing to execute Python code...")
+    
+    try:
+        # Initialize shell and namespace
+        shell = InteractiveShell.instance()
+        
+        # Create a clean namespace
+        namespace = {
+            '_oh': {},
+            '_ih': [],
+            'Out': {},
+            '_': None,
+            '__': None,
+            '___': None,
+            'pd': pd,
+            'px': px
+        }
+        
+        # If SQL query is provided, load data into DataFrame
+        df = None
+        conn = None
+        if sql_query:
+            writer(f"Loading data from SQL query: {sql_query[:100]}...")
+            
+            # Get DuckDB connection
+            conn = data_loader.get_connection()
+            
+            # Get list of tables accessible by this user (similar to query_duckdb)
+            metadata_query = "SELECT table_name FROM metadata WHERE user_id = ?"
+            metadata_params = [user_id]
+            
+            if session_id:
+                metadata_query += " AND session_id = ?"
+                metadata_params.append(session_id)
+            
+            try:
+                accessible_tables_df = conn.execute(metadata_query, metadata_params).fetchdf()
+                accessible_tables = set(accessible_tables_df['table_name'].tolist()) if not accessible_tables_df.empty else set()
+                accessible_tables.add('metadata')
+                accessible_views = data_loader.get_accessible_views(user_id, session_id)
+                accessible_tables.update(accessible_views)
+            except Exception:
+                accessible_tables = {'metadata'}
+            
+            # Basic SQL injection prevention
+            dangerous_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE', 'EXEC', 'EXECUTE']
+            sql_upper = sql_query.upper()
+            for keyword in dangerous_keywords:
+                if keyword in sql_upper:
+                    error_msg = f"Error: SQL query contains forbidden keyword '{keyword}'. Only SELECT queries are allowed."
+                    writer(error_msg)
+                    return (error_msg, None)
+            
+            # Ensure it's a SELECT query
+            if not sql_query.strip().upper().startswith('SELECT'):
+                error_msg = "Error: Only SELECT queries are allowed."
+                writer(error_msg)
+                return (error_msg, None)
+            
+            writer("Executing SQL query to load DataFrame...")
+            
+            # Execute SQL query to get DataFrame
+            try:
+                df = conn.execute(sql_query).fetchdf()
+                namespace['df'] = df
+                namespace['conn'] = conn
+                writer(f"DataFrame loaded with {len(df)} rows.")
+            except Exception as e:
+                error_msg = f"Error executing SQL query: {str(e)}"
+                logger.error(error_msg)
+                writer(error_msg)
+                return (error_msg, None)
+        else:
+            # Add conn to namespace even if no SQL query (for potential use in Python code)
+            conn = data_loader.get_connection()
+            namespace['conn'] = conn
+        
+        # Set shell namespace
+        shell.user_ns = namespace
+        
+        # Capture output
+        captured_output = StringIO()
+        error_message = None
+        result = None
+        
+        writer("Executing Python code...")
+        
+        try:
+            with redirect_stdout(captured_output):
+                execution_result = shell.run_cell(python_code.strip(), store_history=False)
+            
+            # Check for errors
+            if execution_result.error_before_exec is not None:
+                error_message = f"{type(execution_result.error_before_exec).__name__}: {str(execution_result.error_before_exec)}"
+            elif execution_result.error_in_exec is not None:
+                error_message = f"{type(execution_result.error_in_exec).__name__}: {str(execution_result.error_in_exec)}"
+            else:
+                result = execution_result.result
+                
+        except Exception as e:
+            error_message = f"{type(e).__name__}: {str(e)}"
+        finally:
+            stdout = captured_output.getvalue()
+            captured_output.close()
+            
+            # Clear the namespace to free memory
+            shell.user_ns.clear()
+            shell.reset(new_session=True)
+        
+        # Combine stdout and result
+        output_text = stdout
+        if result is not None:
+            result_str = str(result)
+            if result_str and result_str not in output_text:
+                output_text += f"\n{result_str}" if output_text else result_str
+        
+        # Create artifacts
+        artifacts = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "python_code": python_code,
+            "sql_query": sql_query,
+            "output": output_text.strip(),
+            "error": error_message,
+            "status": "error" if error_message else "success"
+        }
+        
+        if df is not None:
+            artifacts["row_count"] = len(df)
+        
+        if error_message:
+            content = f"Error executing Python code:\n{error_message}\n\nOutput:\n{output_text.strip()}"
+            writer(f"Execution failed: {error_message}")
+        else:
+            content = f"Python code executed successfully.\n\nOutput:\n{output_text.strip()}"
+            writer("Execution completed successfully.")
+        
+        return (content, artifacts)
+        
+    except Exception as e:
+        error_msg = f"Error executing Python code: {str(e)}"
+        logger.error(error_msg)
+        writer(error_msg)
+        return (error_msg, None)
+
+
 def get_tools() -> List:
     """Get all available tools."""
-    return [calculator, get_current_time, search_documents, query_duckdb, create_view, create_visualization]
+    return [calculator, get_current_time, search_documents, query_duckdb, create_view, create_visualization, execute_python]
 
  
