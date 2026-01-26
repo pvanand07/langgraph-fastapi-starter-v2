@@ -529,8 +529,8 @@ def main():
     parser = argparse.ArgumentParser(description="Test the Chat API endpoint")
     parser.add_argument(
         "--url",
-        default="http://localhost:8000",
-        help="Base URL of the API (default: http://localhost:8000)"
+        default="https://fmcg-agent.elevatics.site",
+        help="Base URL of the API (default: https://fmcg-agent.elevatics.site)"
     )
     parser.add_argument(
         "--user-id",
