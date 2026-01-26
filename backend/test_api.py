@@ -366,7 +366,7 @@ Provide a score from 0-100 where:
         
         return result
     
-    def run_all_tests(self, test_cases: List[TestCase]) -> Dict:
+    def run_all_tests(self, test_cases: List[TestCase], output_dir: str = "test_results", output_file: Optional[str] = None) -> Dict:
         """Run all test cases and generate a summary report."""
         print("="*80)
         print("CHAT API TEST SUITE")
@@ -389,10 +389,17 @@ Provide a score from 0-100 where:
             test_number = test_case.id if test_case.id else i
             result = self.run_test_case(test_case, test_number)
             self.results.append(result)
+            
+            # Save incrementally after each test
+            self.save_results(output_dir=output_dir, filename=output_file, show_message=False)
+            print(f"💾 Progress saved ({i}/{len(test_cases)} tests completed)")
+            
             time.sleep(1)  # Small delay between requests
         
-        # Generate summary
-        return self.generate_summary()
+        # Generate and save final summary
+        summary = self.generate_summary()
+        self.save_results(output_dir=output_dir, filename=output_file, show_message=True)
+        return summary
     
     def generate_summary(self) -> Dict:
         """Generate a summary report of all test results."""
@@ -445,13 +452,14 @@ Provide a score from 0-100 where:
         
         return summary
     
-    def save_results(self, output_dir: str = "test_results", filename: Optional[str] = None):
+    def save_results(self, output_dir: str = "test_results", filename: Optional[str] = None, show_message: bool = True):
         """
         Save test results to a JSON file with timestamp.
         
         Args:
             output_dir: Directory to save results in (default: test_results)
             filename: Optional custom filename. If not provided, uses timestamp.
+            show_message: Whether to print save confirmation message (default: True)
         """
         # Create output directory if it doesn't exist
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -463,22 +471,47 @@ Provide a score from 0-100 where:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"test_results_{timestamp}.json"
         
-        filepath = os.path.join(results_dir, filename)
+        # Store the filepath for reuse in incremental saves
+        if not hasattr(self, '_output_filepath'):
+            self._output_filepath = os.path.join(results_dir, filename)
         
-        # Generate comprehensive summary
-        if self.results:
-            summary = self.generate_summary()
-        else:
-            summary = {
-                "timestamp": datetime.now().isoformat(),
-                "results": []
-            }
+        # Generate comprehensive summary (without printing)
+        total = len(self.results)
+        passed = sum(1 for r in self.results if r["passed"])
+        failed = total - passed
+        errors = sum(1 for r in self.results if r.get("error"))
+        
+        # Group by complexity
+        complexity_levels = ["Simple", "Medium", "Complex", "Extremely Complex"]
+        by_complexity = {}
+        
+        for complexity in complexity_levels:
+            passed_count = sum(1 for r in self.results if r["complexity"] == complexity and r["passed"])
+            total_count = sum(1 for r in self.results if r["complexity"] == complexity)
+            if total_count > 0:
+                by_complexity[complexity.lower().replace(" ", "_")] = {
+                    "passed": passed_count,
+                    "total": total_count,
+                    "pass_rate": (passed_count / total_count * 100) if total_count > 0 else 0
+                }
+        
+        summary = {
+            "timestamp": datetime.now().isoformat(),
+            "total_tests": total,
+            "passed": passed,
+            "failed": failed,
+            "errors": errors,
+            "pass_rate": (passed / total * 100) if total > 0 else 0,
+            "by_complexity": by_complexity,
+            "results": self.results
+        }
         
         # Save to file
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(self._output_filepath, 'w', encoding='utf-8') as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
         
-        print(f"\n💾 Results saved to {filepath}")
+        if show_message:
+            print(f"\n💾 Results saved to {self._output_filepath}")
 
 
 def main():
@@ -563,7 +596,7 @@ def main():
             test_case = matching_tests[0]
             result = tester.run_test_case(test_case, args.test_number)
             tester.results = [result]
-            tester.save_results(output_dir=args.output_dir, filename=args.output_file)
+            tester.save_results(output_dir=args.output_dir, filename=args.output_file, show_message=True)
         else:
             print(f"❌ Test with ID {args.test_number} not found")
             if args.complexity:
@@ -572,8 +605,7 @@ def main():
         # Run all tests (or filtered by complexity)
         if args.complexity:
             print(f"🔍 Filtering tests by complexity: {args.complexity}")
-        tester.run_all_tests(test_cases)
-        tester.save_results(output_dir=args.output_dir, filename=args.output_file)
+        tester.run_all_tests(test_cases, output_dir=args.output_dir, output_file=args.output_file)
 
 
 if __name__ == "__main__":
