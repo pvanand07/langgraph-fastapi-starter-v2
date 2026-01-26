@@ -1,10 +1,15 @@
 """Minimal tool definitions for the chatbot agent."""
 
 import logging
+import re
+import uuid
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any
 from langchain.tools import tool, ToolRuntime
+import pandas as pd
+import plotly.express as px
 import document_store
 import data_loader
 
@@ -313,8 +318,162 @@ async def create_view(
         return (error_msg, None)
 
 
+@tool(response_format="content_and_artifact")
+async def create_visualization(
+    sql_query: str,
+    plotly_code: str,
+    runtime: ToolRuntime[ChatContext]
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Create a visualization from SQL query results using custom plotly code.
+    
+    Args:
+        sql_query: SQL query to create the DataFrame
+        plotly_code: Python code using created df and plotly to create the visualization
+        runtime: ToolRuntime containing user context
+    
+    Returns:
+        Tuple of (content_string, artifacts_dict) with visualization result.
+        The plotly_code should expect a DataFrame named 'df' and create a figure named 'fig'.
+        Use mapbox for map visualizations and use mapbox_style='mapbox://styles/mapbox/streets-v11'.
+        IMPORTANT: The df (from SQL query), px (plotly.express), pd (pandas) variables are already 
+        imported and available in the namespace, do not create them again.
+    """
+    writer = runtime.stream_writer
+    user_id = runtime.context.user_id
+    session_id = runtime.context.thread_id
+    
+    MAPBOX_ACCESS_TOKEN = "pk.eyJ1Ijoiam9obi1qb2huMTIzNDIzNCIsImEiOiJjbTRza3hpencwMXdrMnJzY3lyYnR2ZjJ6In0.LxOF4CYHZ2r99hlnW4Ai8w"
+    
+    writer(f"Creating visualization from SQL query...")
+    
+    try:
+        # Get DuckDB connection
+        conn = data_loader.get_connection()
+        
+        # Get list of tables accessible by this user (similar to query_duckdb)
+        metadata_query = "SELECT table_name FROM metadata WHERE user_id = ?"
+        metadata_params = [user_id]
+        
+        if session_id:
+            metadata_query += " AND session_id = ?"
+            metadata_params.append(session_id)
+        
+        try:
+            accessible_tables_df = conn.execute(metadata_query, metadata_params).fetchdf()
+            accessible_tables = set(accessible_tables_df['table_name'].tolist()) if not accessible_tables_df.empty else set()
+            accessible_tables.add('metadata')
+            accessible_views = data_loader.get_accessible_views(user_id, session_id)
+            accessible_tables.update(accessible_views)
+        except Exception:
+            accessible_tables = {'metadata'}
+        
+        # Basic SQL injection prevention
+        dangerous_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE', 'EXEC', 'EXECUTE']
+        sql_upper = sql_query.upper()
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                error_msg = f"Error: SQL query contains forbidden keyword '{keyword}'. Only SELECT queries are allowed."
+                writer(error_msg)
+                return (error_msg, None)
+        
+        # Ensure it's a SELECT query
+        if not sql_query.strip().upper().startswith('SELECT'):
+            error_msg = "Error: Only SELECT queries are allowed."
+            writer(error_msg)
+            return (error_msg, None)
+        
+        writer("Executing SQL query to get DataFrame...")
+        
+        # Execute SQL query to get DataFrame
+        try:
+            df = conn.execute(sql_query).fetchdf()
+        except Exception as e:
+            error_msg = f"Error executing SQL query: {str(e)}"
+            logger.error(error_msg)
+            writer(error_msg)
+            return (error_msg, None)
+        
+        if df.empty:
+            error_msg = "SQL query returned no results. Cannot create visualization from empty DataFrame."
+            writer(error_msg)
+            return (error_msg, None)
+        
+        writer(f"DataFrame created with {len(df)} rows. Executing plotly code...")
+        
+        # Set mapbox access token
+        px.set_mapbox_access_token(MAPBOX_ACCESS_TOKEN)
+        
+        # Create a namespace for code execution
+        namespace = {
+            'df': df,
+            'sql_query': sql_query,
+            'conn': conn,
+            'px': px,
+            'pd': pd,
+            'fig': None,
+            'mapbox_access_token': MAPBOX_ACCESS_TOKEN
+        }
+        
+        # Use regex to remove the full line containing "import plotly.express"
+        cleaned_plotly_code = re.sub(r'^import\s+plotly\.express.*(\n|$)', '', plotly_code, flags=re.MULTILINE)
+        # Also remove other common plotly imports
+        cleaned_plotly_code = re.sub(r'^import\s+plotly.*(\n|$)', '', cleaned_plotly_code, flags=re.MULTILINE)
+        cleaned_plotly_code = re.sub(r'^from\s+plotly.*(\n|$)', '', cleaned_plotly_code, flags=re.MULTILINE)
+        
+        # Execute the plotly code in the namespace
+        try:
+            exec(cleaned_plotly_code, namespace)
+            fig = namespace.get('fig')
+            
+            if fig is None:
+                error_msg = "Plotly code did not create a 'fig' object. Make sure your code creates a figure and assigns it to 'fig'."
+                writer(error_msg)
+                return (error_msg, None)
+                
+        except Exception as e:
+            error_msg = f"Error in plotly code execution: {str(e)}"
+            logger.error(error_msg)
+            writer(error_msg)
+            return (error_msg, None)
+        
+        # Convert plotly figure to JSON
+        try:
+            fig_json = fig.to_json()
+        except Exception as e:
+            error_msg = f"Error serializing plotly figure to JSON: {str(e)}"
+            logger.error(error_msg)
+            writer(error_msg)
+            return (error_msg, None)
+        
+        # Generate artifact ID
+        artifact_id = str(uuid.uuid4())
+        
+        # Create artifacts dictionary
+        artifacts = {
+            "artifact_id": artifact_id,
+            "artifact_type": "application/vnd.plotly.v1+json",
+            "plotly_fig_json": fig_json,
+            "user_id": user_id,
+            "session_id": session_id,
+            "sql_query": sql_query,
+            "row_count": len(df)
+        }
+        
+        content = f"Visualization created successfully from plotly code. DataFrame had {len(df)} rows. artifact id is <artifact_id={artifact_id}>"
+        writer(content)
+        
+        return (content, artifacts)
+        
+    except Exception as e:
+        error_msg = f"Error creating visualization: {str(e)}"
+        logger.error(error_msg)
+        writer(error_msg)
+        return (error_msg, None)
+
+
 def get_tools() -> List:
     """Get all available tools."""
-    return [calculator, get_current_time, search_documents, query_duckdb, create_view]
+    return [calculator, get_current_time, search_documents, query_duckdb, create_view, create_visualization]
 
  

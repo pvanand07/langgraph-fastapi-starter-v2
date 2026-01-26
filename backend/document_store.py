@@ -420,3 +420,49 @@ def get_document_context(user_id: str, doc_ids: Optional[List[str]] = None, max_
         return "\n\n".join(context_parts)
 
 
+def delete_document(user_id: str, doc_id: str) -> bool:
+    """
+    Delete a document and all its pages for a user.
+    
+    Args:
+        user_id: User ID
+        doc_id: Document ID
+        
+    Returns:
+        True if document was found and deleted, False if not found
+    """
+    create_tables()
+    
+    with SessionLocal() as db:
+        try:
+            # Check if document exists
+            doc = db.query(Document).filter(
+                and_(Document.user_id == user_id, Document.doc_id == doc_id)
+            ).first()
+            
+            if not doc:
+                return False
+            
+            # Delete pages
+            db.query(Page).filter(
+                and_(Page.user_id == user_id, Page.doc_id == doc_id)
+            ).delete()
+            
+            # Delete document
+            db.query(Document).filter(
+                and_(Document.user_id == user_id, Document.doc_id == doc_id)
+            ).delete()
+            
+            # Delete from FTS table
+            db.execute(text("""
+                DELETE FROM page_fts 
+                WHERE user_id = :user_id AND doc_id = :doc_id
+            """), {"user_id": user_id, "doc_id": doc_id})
+            
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            raise e
+
+

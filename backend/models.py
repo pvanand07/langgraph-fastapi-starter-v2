@@ -75,6 +75,26 @@ class DocumentListResponse(BaseModel):
     documents: List[DocumentResponse]
 
 
+class UnifiedDocumentItem(BaseModel):
+    """Unified document/item response that can represent both documents (PDF/DOCX) and Excel files."""
+    file_type: Literal["document", "excel"]
+    filename: str
+    created_at: str
+    doc_id: str
+    content_preview: Optional[str] = None
+    
+    # Document fields (for PDF/DOCX)
+    page_count: Optional[int] = None
+
+
+class UnifiedDocumentListResponse(BaseModel):
+    """Unified document list response including both documents and Excel files."""
+    items: List[UnifiedDocumentItem]
+    total_count: int
+    document_count: int
+    excel_count: int
+
+
 class UploadResponse(BaseModel):
     """File upload response."""
     message: str

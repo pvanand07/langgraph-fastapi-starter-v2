@@ -1,0 +1,684 @@
+{
+  "api_info": {
+    "name": "LangGraph Chatbot API",
+    "version": "1.0.0",
+    "base_url": "http://localhost:8000",
+    "api_prefix": "/api/v1",
+    "description": "FastAPI backend for LangGraph chatbot with document and data table support"
+  },
+  "authentication": {
+    "type": "user_id_based",
+    "method": "query_parameter_or_form_field",
+    "required": true,
+    "note": "No additional authentication headers required"
+  },
+  "endpoints": [
+    {
+      "path": "/api/v1/chat",
+      "method": "POST",
+      "description": "Main chat endpoint with Server-Sent Events (SSE) streaming support",
+      "content_type": "application/json",
+      "response_type": "text/event-stream",
+      "request_body": {
+        "required": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "required": true,
+              "description": "User message"
+            },
+            "thread_id": {
+              "type": "string",
+              "required": false,
+              "description": "Conversation thread ID. If not provided, a new thread will be created"
+            },
+            "user_id": {
+              "type": "string",
+              "required": true,
+              "description": "User identifier"
+            },
+            "model_id": {
+              "type": "string",
+              "required": false,
+              "description": "Optional model override"
+            }
+          }
+        }
+      },
+      "response_events": [
+        {
+          "type": "chunk",
+          "description": "Partial text content",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["chunk"]},
+              "content": {"type": "string"}
+            }
+          }
+        },
+        {
+          "type": "tool_start",
+          "description": "Tool execution started",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["tool_start"]},
+              "name": {"type": "string"},
+              "input": {"type": "object"}
+            }
+          }
+        },
+        {
+          "type": "tool_end",
+          "description": "Tool execution completed",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["tool_end"]},
+              "name": {"type": "string"},
+              "output": {"type": "string"}
+            }
+          }
+        },
+        {
+          "type": "full_response",
+          "description": "Complete assistant response",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["full_response"]},
+              "content": {"type": "string"}
+            }
+          }
+        },
+        {
+          "type": "error",
+          "description": "Error occurred",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["error"]},
+              "content": {"type": "string"}
+            }
+          }
+        }
+      ],
+      "behavior": [
+        "Automatically creates thread if thread_id not provided",
+        "Auto-generates thread title from user query",
+        "Saves user and assistant messages automatically",
+        "Builds context from documents and data tables",
+        "Tracks tool events during streaming"
+      ],
+      "error_codes": {
+        "503": "Chat server not initialized",
+        "500": "Processing error"
+      }
+    },
+    {
+      "path": "/api/v1/upload",
+      "method": "POST",
+      "description": "Unified file upload endpoint supporting multiple files",
+      "content_type": "multipart/form-data",
+      "response_type": "application/json",
+      "form_fields": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": false,
+          "description": "Session ID (required for Excel files)"
+        },
+        {
+          "name": "files",
+          "type": "File[]",
+          "required": true,
+          "description": "One or more files to upload"
+        }
+      ],
+      "supported_file_types": {
+        "documents": {
+          "extensions": [".pdf", ".docx"],
+          "processing": "Extracted and stored as searchable text",
+          "features": ["Duplicate detection by hash", "Page extraction"]
+        },
+        "excel": {
+          "extensions": [".xlsx", ".xls"],
+          "processing": "Loaded into DuckDB database",
+          "requirements": ["session_id required"],
+          "features": ["Table creation", "Metadata extraction", "Schema detection"]
+        }
+      },
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_type": {"type": "string", "enum": ["document", "excel"]},
+                "message": {"type": "string"},
+                "filename": {"type": "string"},
+                "doc_id": {"type": "string"},
+                "page_count": {"type": "integer"},
+                "table_name": {"type": "string"},
+                "row_count": {"type": "integer"},
+                "column_count": {"type": "integer"},
+                "columns": {"type": "array", "items": {"type": "string"}},
+                "metadata": {"type": "object"}
+              }
+            }
+          },
+          "total_files": {"type": "integer"},
+          "successful": {"type": "integer"},
+          "failed": {"type": "integer"},
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filename": {"type": "string"},
+                "error": {"type": "string"},
+                "status_code": {"type": "integer"}
+              }
+            }
+          }
+        }
+      },
+      "error_codes": {
+        "400": "No files provided, empty file, unsupported type, or missing session_id for Excel",
+        "409": "Duplicate file (same hash already exists)",
+        "500": "File processing error"
+      }
+    },
+    {
+      "path": "/api/v1/metadata-csv",
+      "method": "GET",
+      "description": "Get metadata table as CSV string",
+      "content_type": "text/csv",
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": false,
+          "description": "Filter by user ID"
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": false,
+          "description": "Filter by session ID"
+        }
+      ],
+      "response": {
+        "content_type": "text/csv",
+        "headers": {
+          "Content-Disposition": "attachment; filename=metadata.csv"
+        },
+        "description": "CSV string with all metadata columns from uploaded Excel files"
+      },
+      "error_codes": {
+        "404": "No metadata found for specified filters",
+        "500": "Error retrieving metadata"
+      }
+    },
+    {
+      "path": "/api/v1/tables-by-schema-csv",
+      "method": "GET",
+      "description": "Get table names grouped by unique table schemas",
+      "content_type": "text/markdown",
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": false,
+          "description": "Filter by user ID"
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": false,
+          "description": "Filter by session ID"
+        }
+      ],
+      "response": {
+        "content_type": "text/markdown",
+        "headers": {
+          "Content-Disposition": "attachment; filename=tables_by_schema.md"
+        },
+        "format": "Markdown with embedded CSV sections showing tables grouped by schema"
+      },
+      "error_codes": {
+        "404": "No tables found for specified filters",
+        "500": "Error retrieving tables"
+      }
+    },
+    {
+      "path": "/api/v1/threads",
+      "method": "GET",
+      "description": "List conversation threads for a user with pagination",
+      "content_type": "application/json",
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": true,
+          "description": "User ID"
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "default": 20,
+          "min": 1,
+          "max": 100,
+          "description": "Number of threads to return"
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false,
+          "description": "Cursor for pagination"
+        },
+        {
+          "name": "order",
+          "type": "string",
+          "required": false,
+          "default": "desc",
+          "enum": ["asc", "desc"],
+          "description": "Sort order"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "user_id": {"type": "string"},
+                "title": {"type": "string"},
+                "created_at": {"type": "string", "format": "iso8601"},
+                "updated_at": {"type": "string", "format": "iso8601"}
+              }
+            }
+          },
+          "has_more": {"type": "boolean"},
+          "after": {"type": "string"}
+        }
+      },
+      "error_codes": {
+        "500": "Error listing threads"
+      }
+    },
+    {
+      "path": "/api/v1/threads/{thread_id}/messages",
+      "method": "GET",
+      "description": "Get messages from a conversation thread with pagination",
+      "content_type": "application/json",
+      "path_parameters": [
+        {
+          "name": "thread_id",
+          "type": "string",
+          "required": true,
+          "description": "Thread ID"
+        }
+      ],
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": true,
+          "description": "User ID"
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "description": "Number of messages to return"
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false,
+          "description": "Cursor for pagination"
+        },
+        {
+          "name": "order",
+          "type": "string",
+          "required": false,
+          "default": "desc",
+          "enum": ["asc", "desc"],
+          "description": "Sort order"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "thread_id": {"type": "string"},
+                "role": {"type": "string", "enum": ["user", "assistant"]},
+                "content": {"type": "string"},
+                "created_at": {"type": "string", "format": "iso8601"},
+                "tool_events": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {"type": "string", "enum": ["tool_start", "tool_end"]},
+                      "name": {"type": "string"},
+                      "input": {"type": "object"},
+                      "output": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "has_more": {"type": "boolean"},
+          "after": {"type": "string"}
+        }
+      },
+      "error_codes": {
+        "404": "Thread not found",
+        "500": "Error retrieving messages"
+      }
+    },
+    {
+      "path": "/api/v1/threads/{thread_id}/rename",
+      "method": "PATCH",
+      "description": "Rename a conversation thread by updating its title",
+      "content_type": "application/json",
+      "path_parameters": [
+        {
+          "name": "thread_id",
+          "type": "string",
+          "required": true,
+          "description": "Thread ID"
+        }
+      ],
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": true,
+          "description": "User ID"
+        }
+      ],
+      "request_body": {
+        "required": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "required": true,
+              "min_length": 1,
+              "description": "New thread title"
+            }
+          }
+        }
+      },
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "user_id": {"type": "string"},
+          "title": {"type": "string"},
+          "created_at": {"type": "string", "format": "iso8601"},
+          "updated_at": {"type": "string", "format": "iso8601"}
+        }
+      },
+      "error_codes": {
+        "404": "Thread not found for user",
+        "500": "Error renaming thread"
+      }
+    },
+    {
+      "path": "/api/v1/threads/{thread_id}",
+      "method": "DELETE",
+      "description": "Delete a conversation thread",
+      "content_type": "application/json",
+      "path_parameters": [
+        {
+          "name": "thread_id",
+          "type": "string",
+          "required": true,
+          "description": "Thread ID"
+        }
+      ],
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": true,
+          "description": "User ID"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"}
+        }
+      },
+      "error_codes": {
+        "404": "Thread not found",
+        "500": "Error deleting thread"
+      }
+    },
+    {
+      "path": "/api/v1/documents",
+      "method": "GET",
+      "description": "List all documents (PDF/DOCX) for a user",
+      "content_type": "application/json",
+      "query_parameters": [
+        {
+          "name": "user_id",
+          "type": "string",
+          "required": true,
+          "description": "User ID"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "doc_id": {"type": "string"},
+                "doc_name": {"type": "string"},
+                "user_id": {"type": "string"},
+                "page_count": {"type": "integer"},
+                "file_hash": {"type": "string"},
+                "created_at": {"type": "string", "format": "iso8601"}
+              }
+            }
+          }
+        }
+      },
+      "error_codes": {
+        "500": "Error listing documents"
+      }
+    },
+    {
+      "path": "/api/v1/health",
+      "method": "GET",
+      "description": "Health check endpoint",
+      "content_type": "application/json",
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string", "enum": ["healthy"]},
+          "service": {"type": "string"},
+          "timestamp": {"type": "string", "format": "iso8601"}
+        }
+      }
+    },
+    {
+      "path": "/",
+      "method": "GET",
+      "description": "Root endpoint - serves frontend or API info",
+      "response": {
+        "if_frontend_exists": "Returns index.html",
+        "if_frontend_missing": {
+          "type": "object",
+          "properties": {
+            "message": {"type": "string"},
+            "version": {"type": "string"},
+            "endpoints": {"type": "object"}
+          }
+        }
+      }
+    }
+  ],
+  "data_models": {
+    "ChatInput": {
+      "query": {"type": "string", "required": true},
+      "thread_id": {"type": "string", "required": false},
+      "user_id": {"type": "string", "required": true},
+      "model_id": {"type": "string", "required": false}
+    },
+    "ThreadResponse": {
+      "id": {"type": "string"},
+      "user_id": {"type": "string"},
+      "title": {"type": "string", "required": false},
+      "created_at": {"type": "string", "format": "iso8601"},
+      "updated_at": {"type": "string", "format": "iso8601"}
+    },
+    "MessageResponse": {
+      "id": {"type": "string"},
+      "thread_id": {"type": "string"},
+      "role": {"type": "string", "enum": ["user", "assistant"]},
+      "content": {"type": "string"},
+      "created_at": {"type": "string", "format": "iso8601"},
+      "tool_events": {
+        "type": "array",
+        "required": false,
+        "items": {
+          "type": "object",
+          "properties": {
+            "type": {"type": "string", "enum": ["tool_start", "tool_end"]},
+            "name": {"type": "string"},
+            "input": {"type": "object"},
+            "output": {"type": "string"}
+          }
+        }
+      }
+    },
+    "DocumentResponse": {
+      "doc_id": {"type": "string"},
+      "doc_name": {"type": "string"},
+      "user_id": {"type": "string"},
+      "page_count": {"type": "integer"},
+      "file_hash": {"type": "string", "required": false},
+      "created_at": {"type": "string", "format": "iso8601"}
+    },
+    "UnifiedUploadResponse": {
+      "file_type": {"type": "string", "enum": ["document", "excel"]},
+      "message": {"type": "string"},
+      "filename": {"type": "string"},
+      "doc_id": {"type": "string", "required": false},
+      "page_count": {"type": "integer", "required": false},
+      "table_name": {"type": "string", "required": false},
+      "row_count": {"type": "integer", "required": false},
+      "column_count": {"type": "integer", "required": false},
+      "columns": {"type": "array", "items": {"type": "string"}, "required": false},
+      "metadata": {"type": "object", "required": false}
+    },
+    "RenameThreadRequest": {
+      "title": {"type": "string", "required": true, "min_length": 1, "description": "New thread title"}
+    }
+  },
+  "error_handling": {
+    "standard_format": {
+      "type": "object",
+      "properties": {
+        "detail": {"type": "string"}
+      }
+    },
+    "error_codes": {
+      "400": "Bad Request - Invalid parameters or missing required fields",
+      "404": "Not Found - Resource not found",
+      "409": "Conflict - Duplicate resource",
+      "500": "Internal Server Error - Server-side processing error",
+      "503": "Service Unavailable - Service not initialized"
+    }
+  },
+  "context_building": {
+    "description": "Chat endpoint automatically builds context from multiple sources",
+    "sources": [
+      {
+        "type": "document_context",
+        "description": "Extracts relevant text from user's uploaded PDF/DOCX documents",
+        "max_tokens": 1000
+      },
+      {
+        "type": "data_table_metadata",
+        "description": "Includes metadata CSV from uploaded Excel files",
+        "endpoint": "/api/v1/metadata-csv"
+      },
+      {
+        "type": "table_schemas",
+        "description": "Includes schema information (column names and types) for all tables",
+        "endpoint": "/api/v1/tables-by-schema-csv"
+      }
+    ]
+  },
+  "streaming_protocol": {
+    "type": "Server-Sent Events (SSE)",
+    "content_type": "text/event-stream",
+    "format": "Each line is a JSON object (except empty lines)",
+    "event_types": ["chunk", "tool_start", "tool_end", "full_response", "error"],
+    "connection": "Keep-alive",
+    "headers": {
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    }
+  },
+  "cors": {
+    "allow_origins": ["*"],
+    "allow_credentials": true,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"]
+  },
+  "best_practices": [
+    "Always provide a consistent user_id across requests",
+    "Use thread_id to maintain conversation context",
+    "Use session_id for Excel files to group related data",
+    "Check for duplicate files before uploading (409 error indicates duplicate)",
+    "Use 'after' cursor from responses for paginated requests",
+    "Always check response status and handle errors appropriately",
+    "Properly handle SSE streams and parse JSON events"
+  ],
+  "notes_for_ai_agents": [
+    "Threads are automatically created when thread_id is omitted from chat requests",
+    "Thread title is auto-generated from the user's query",
+    "Chat endpoint automatically integrates document and data table context",
+    "Tool usage is tracked and included in message responses",
+    "Files are deduplicated by hash to prevent duplicate storage",
+    "Excel files should use the same session_id to group related data tables",
+    "All list endpoints support cursor-based pagination using the 'after' parameter"
+  ]
+}
+

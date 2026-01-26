@@ -36,10 +36,14 @@ python-docx
 pydantic
 
 # Excel and data processing
-pandas
+numpy<2.0  # Required for pandas<2.0 binary compatibility
+pandas<2.0  # Avoid StringDtype issues with DuckDB
 openpyxl
 duckdb
 
-
+# Data visualization
+plotly 
+seaborn 
+matplotlib 
 
 

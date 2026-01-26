@@ -83,10 +83,12 @@ def check_duplicate_excel_file(user_id: str, file_hash: str, session_id: Optiona
     """
     Check if an Excel file with the same hash already exists for the user.
     
+    Duplicate detection works regardless of session_id - only checks user_id and file_hash.
+    
     Args:
         user_id: User ID
         file_hash: SHA256 hash of the file
-        session_id: Optional session ID filter
+        session_id: Ignored - kept for backward compatibility but not used in duplicate check
         
     Returns:
         Dict with table_name, filename if duplicate found, None otherwise
@@ -94,12 +96,9 @@ def check_duplicate_excel_file(user_id: str, file_hash: str, session_id: Optiona
     conn = get_connection()
     
     try:
+        # Always check by user_id and file_hash only, ignoring session_id
         query = "SELECT table_name, filename, source_file FROM metadata WHERE user_id = ? AND file_hash = ?"
         params = [user_id, file_hash]
-        
-        if session_id:
-            query += " AND session_id = ?"
-            params.append(session_id)
         
         result = conn.execute(query, params).fetchdf()
         
@@ -216,7 +215,7 @@ def load_excel_file(
     excel_bytes: bytes,
     filename: str,
     user_id: str,
-    session_id: str
+    session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Load an Excel file and store it in DuckDB.
@@ -225,7 +224,7 @@ def load_excel_file(
         excel_bytes: Excel file content as bytes
         filename: Original filename
         user_id: User ID
-        session_id: Session ID
+        session_id: Optional Session ID
         
     Returns:
         Dictionary with table_name, row_count, column_count, and metadata
@@ -233,16 +232,11 @@ def load_excel_file(
     conn = get_connection()
     
     try:
-        # Calculate file hash
-        file_hash = calculate_file_hash(excel_bytes)
+        # Note: Duplicate checking is handled at the API level in main.py
+        # This function assumes the file is not a duplicate
         
-        # Check for duplicate file (same hash for same user in same session)
-        duplicate = check_duplicate_excel_file(user_id, file_hash, session_id)
-        if duplicate:
-            raise ValueError(
-                f"File '{filename}' already exists as '{duplicate['filename']}' "
-                f"(table: {duplicate['table_name']})"
-            )
+        # Calculate file hash for metadata storage
+        file_hash = calculate_file_hash(excel_bytes)
         
         # Generate table name automatically
         table_name = generate_table_name(filename)
@@ -259,6 +253,55 @@ def load_excel_file(
         
         logger.info("Loaded DataFrame shape: %s", df.shape)
         logger.info("Metadata: %s", metadata)
+        
+        # Prepare DataFrame for DuckDB registration
+        # DuckDB has issues with pandas object dtype, so we need to convert them explicitly
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                # Try to convert to numeric first (in case it's a numeric column stored as object)
+                try:
+                    # Check if column can be converted to numeric
+                    numeric_series = pd.to_numeric(df[col], errors='coerce')
+                    if numeric_series.notna().sum() > len(df[col]) * 0.8:  # If >80% are numeric
+                        df[col] = numeric_series
+                    else:
+                        # Convert to string, handling NaN values properly
+                        # Replace NaN with empty string before conversion
+                        df[col] = df[col].fillna('')
+                        df[col] = df[col].astype(str)
+                        # Clean up any remaining problematic string representations
+                        df[col] = df[col].replace('nan', '').replace('None', '').replace('<NA>', '').replace('NaT', '')
+                except (ValueError, TypeError):
+                    # If conversion fails, treat as string
+                    df[col] = df[col].fillna('')
+                    df[col] = df[col].astype(str)
+                    df[col] = df[col].replace('nan', '').replace('None', '').replace('<NA>', '').replace('NaT', '')
+            elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                # Keep datetime columns as is
+                pass
+            else:
+                # For other types, ensure NaN values are handled
+                if df[col].isna().any():
+                    # Replace NaN with None for numeric columns
+                    df[col] = df[col].where(pd.notna(df[col]), None)
+        
+        # Sanitize column names for DuckDB (remove special characters, ensure valid identifiers)
+        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)) for col in df.columns]
+        # Ensure column names don't start with numbers and are not empty
+        new_columns = []
+        for col in df.columns:
+            if not col or col[0].isdigit():
+                new_col = f'col_{col}' if col else 'unnamed_col'
+            else:
+                new_col = col
+            # Ensure unique column names
+            if new_col in new_columns:
+                counter = 1
+                while f'{new_col}_{counter}' in new_columns:
+                    counter += 1
+                new_col = f'{new_col}_{counter}'
+            new_columns.append(new_col)
+        df.columns = new_columns
         
         # Create persistent DuckDB table directly from DataFrame
         # First register as a temporary view, then create persistent table
@@ -811,5 +854,46 @@ def drop_view(
         }
     except Exception as e:
         logger.error("Error dropping view %s: %s", view_name, e)
+        raise
+
+
+def delete_excel_table(user_id: str, table_name: str) -> bool:
+    """
+    Delete an Excel table and its metadata from DuckDB.
+    
+    Args:
+        user_id: User ID
+        table_name: Table name (doc_id for Excel files)
+        
+    Returns:
+        True if table was found and deleted, False if not found
+    """
+    conn = get_connection()
+    
+    try:
+        # Check if table exists in metadata and belongs to user
+        metadata_query = "SELECT table_name FROM metadata WHERE table_name = ? AND user_id = ?"
+        result = conn.execute(metadata_query, [table_name, user_id]).fetchdf()
+        
+        if result.empty:
+            return False
+        
+        # Drop the table
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+            logger.info("Dropped DuckDB table: %s", table_name)
+        except Exception as e:
+            logger.warning("Error dropping table %s (might not exist): %s", table_name, e)
+        
+        # Delete from metadata table
+        conn.execute(
+            "DELETE FROM metadata WHERE table_name = ? AND user_id = ?",
+            [table_name, user_id]
+        )
+        
+        logger.info("Deleted Excel table %s for user %s", table_name, user_id)
+        return True
+    except Exception as e:
+        logger.error("Error deleting Excel table %s: %s", table_name, e)
         raise
 

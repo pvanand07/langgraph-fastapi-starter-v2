@@ -37,7 +37,9 @@ You have access to the following tools:
 - search_documents: Search through user's uploaded documents
 - query_duckdb: Execute SQL queries against the user's data tables in DuckDB
 - create_view: Create persistent views in DuckDB
+- create_visualization: Create visualizations from SQL query results using plotly
 
+To render an artifact on the UI,  include artifact id in the response as <artifact_id="artifact id">
 You also have access to data tables stored in DuckDB. 
 
 When users ask questions about their data:

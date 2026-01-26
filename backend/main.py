@@ -24,7 +24,7 @@ from models import (
     ChatInput, ThreadListResponse, ThreadResponse,
     MessageListResponse, MessageResponse, DocumentListResponse,
     DocumentResponse, HealthResponse, UnifiedUploadResponse, MultiUploadResponse,
-    RenameThreadRequest
+    RenameThreadRequest, UnifiedDocumentListResponse, UnifiedDocumentItem
 )
 from server import ChatServer
 from memory_store import initialize_database
@@ -217,11 +217,15 @@ async def chat(input_data: ChatInput):
                     })
                     
                 elif chunk.get("type") == "tool_end":
-                    tool_events.append({
+                    tool_event = {
                         "type": "tool_end",
                         "name": chunk.get("name", "unknown"),
                         "output": chunk.get("output", "")
-                    })
+                    }
+                    # Include artifacts_data if present
+                    if chunk.get("artifacts_data") is not None:
+                        tool_event["artifacts_data"] = chunk.get("artifacts_data")
+                    tool_events.append(tool_event)
                     
                 elif chunk.get("type") == "full_response":
                     # Save assistant message with all tool events at once
@@ -278,9 +282,13 @@ async def process_single_file(
         # Check for duplicate file (same hash for same user)
         duplicate = document_store.check_duplicate_file(user_id, file_hash)
         if duplicate:
-            raise HTTPException(
-                status_code=409,  # Conflict status code
-                detail=f"Skipping file '{file.filename}' as it already exists in the database"
+            # Return success message for duplicate files without updating the database
+            return UnifiedUploadResponse(
+                file_type="document",
+                message=f"File '{file.filename}' already exists in the database (doc_id: {duplicate['doc_id']})",
+                filename=file.filename,
+                doc_id=duplicate['doc_id'],
+                page_count=duplicate.get('page_count')
             )
         
         # Handle PDF or DOCX documents
@@ -328,22 +336,24 @@ async def process_single_file(
     
     elif filename_lower.endswith(('.xlsx', '.xls')):
         # Handle Excel files
-        if not session_id:
-            raise HTTPException(
-                status_code=400,
-                detail="session_id is required for Excel file uploads"
-            )
-        
-        # Calculate file hash and check for duplicates
+        # Calculate file hash and check for duplicates (by user_id and file_hash only, regardless of session_id)
         file_hash = document_store.calculate_file_hash(file_bytes)
-        duplicate = data_loader.check_duplicate_excel_file(user_id, file_hash, session_id)
+        duplicate = data_loader.check_duplicate_excel_file(user_id, file_hash, session_id=None)
         if duplicate:
-            raise HTTPException(
-                status_code=409,  # Conflict status code
-                detail=f"Skipping file '{file.filename}' as it already exists in the database"
+            # Return success message for duplicate files without updating the database
+            return UnifiedUploadResponse(
+                file_type="excel",
+                message=f"File '{file.filename}' already exists in the database (table: {duplicate['table_name']})",
+                filename=file.filename,
+                doc_id=duplicate['table_name'],  # Use existing table_name as doc_id
+                table_name=duplicate['table_name']
             )
         
-        # Load Excel file into DuckDB
+        # Generate default session_id if not provided
+        if not session_id:
+            session_id = str(uuid.uuid4())
+        
+        # Load Excel file into DuckDB (session_id is now optional)
         result = data_loader.load_excel_file(
             excel_bytes=file_bytes,
             filename=file.filename,
@@ -355,6 +365,7 @@ async def process_single_file(
             file_type="excel",
             message=f"Successfully loaded {result['row_count']} rows into table {result['table_name']}",
             filename=result['filename'],
+            doc_id=result['table_name'],  # Use table_name as doc_id for Excel files
             table_name=result['table_name'],
             row_count=result['row_count'],
             column_count=result['column_count'],
@@ -372,7 +383,7 @@ async def process_single_file(
 @app.post("/api/v1/upload", response_model=MultiUploadResponse)
 async def upload_file(
     user_id: str = Form(...),
-    session_id: Optional[str] = Form(None, description="Session ID (required for Excel files)"),
+    session_id: Optional[str] = Form(None, description="Session ID (optional for all file types)"),
     files: List[UploadFile] = File(...)
 ):
     """
@@ -380,12 +391,15 @@ async def upload_file(
     
     Accepts:
     - user_id: User ID (required)
-    - session_id: Session ID (required for Excel files, optional for documents)
+    - session_id: Session ID (optional for all file types)
     - files: One or more files to upload (.pdf, .docx, .xlsx, .xls)
     
     Returns:
     - List of upload results with success/failure status for each file
     - Summary of total, successful, and failed uploads
+    
+    Note: For duplicate files (same user_id and file_hash), returns success message without updating the database.
+    This applies to all file types (PDF, DOCX, and Excel files).
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -627,25 +641,121 @@ async def rename_thread(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/documents", response_model=DocumentListResponse)
-async def list_documents(user_id: str = Query(..., description="User ID")):
-    """List all documents for a user."""
+@app.get("/api/v1/documents", response_model=UnifiedDocumentListResponse)
+async def list_documents(
+    user_id: str = Query(..., description="User ID"),
+    session_id: Optional[str] = Query(None, description="Optional session ID filter for Excel files")
+):
+    """
+    List all documents and Excel files for a user in a unified format.
+    
+    Returns both:
+    - Documents (PDF/DOCX) with document metadata
+    - Excel files with table metadata and Excel-specific metadata
+    """
     try:
-        docs = document_store.list_documents(user_id)
-        documents = [
-            DocumentResponse(
-                doc_id=doc["doc_id"],
-                doc_name=doc["doc_name"],
-                user_id=doc["user_id"],
-                page_count=doc["page_count"],
-                file_hash=doc.get("file_hash"),
-                created_at=doc["created_at"]
-            )
-            for doc in docs
-        ]
-        return DocumentListResponse(documents=documents)
+        items = []
+        
+        # Get documents (PDF/DOCX)
+        try:
+            docs = document_store.list_documents(user_id)
+            for doc in docs:
+                items.append(UnifiedDocumentItem(
+                    file_type="document",
+                    filename=doc["doc_name"],
+                    created_at=doc["created_at"],
+                    doc_id=doc["doc_id"],
+                    page_count=doc["page_count"],
+                    content_preview=None
+                ))
+        except Exception as e:
+            logger.warning(f"Error loading documents: {e}")
+        
+        # Get Excel files metadata
+        try:
+            excel_tables = data_loader.list_tables(user_id=user_id, session_id=session_id)
+            for excel_data in excel_tables:
+                # Format content_preview as markdown from Excel metadata
+                content_preview_parts = []
+                if excel_data.get("name"):
+                    content_preview_parts.append(f"**Name:** {excel_data.get('name')}")
+                if excel_data.get("address"):
+                    content_preview_parts.append(f"**Address:** {excel_data.get('address')}")
+                if excel_data.get("report_title"):
+                    content_preview_parts.append(f"**Report Title:** {excel_data.get('report_title')}")
+                if excel_data.get("client"):
+                    content_preview_parts.append(f"**Client:** {excel_data.get('client')}")
+                
+                content_preview = "\n".join(content_preview_parts) if content_preview_parts else None
+                
+                # Use table_name as doc_id for Excel files
+                table_name = excel_data.get("table_name")
+                if not table_name:
+                    # Fallback: use filename without extension as doc_id
+                    filename = excel_data.get("filename", excel_data.get("source_file", "unknown"))
+                    table_name = Path(filename).stem if filename != "unknown" else f"excel_{uuid.uuid4().hex[:8]}"
+                
+                items.append(UnifiedDocumentItem(
+                    file_type="excel",
+                    filename=excel_data.get("filename", excel_data.get("source_file", "unknown")),
+                    created_at=str(excel_data.get("created_at", "")),
+                    doc_id=table_name,
+                    content_preview=content_preview
+                ))
+        except Exception as e:
+            logger.warning(f"Error loading Excel metadata: {e}")
+        
+        # Sort by created_at (most recent first)
+        items.sort(key=lambda x: x.created_at, reverse=True)
+        
+        document_count = sum(1 for item in items if item.file_type == "document")
+        excel_count = sum(1 for item in items if item.file_type == "excel")
+        
+        return UnifiedDocumentListResponse(
+            items=items,
+            total_count=len(items),
+            document_count=document_count,
+            excel_count=excel_count
+        )
     except Exception as e:
-        logger.error(f"Error listing documents: {e}")
+        logger.error(f"Error listing unified documents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/documents/{doc_id}")
+async def delete_document(
+    doc_id: str,
+    user_id: str = Query(..., description="User ID")
+):
+    """
+    Delete a document or Excel file by doc_id.
+    
+    Works for both:
+    - Documents (PDF/DOCX): doc_id is the document ID
+    - Excel files: doc_id is the table name
+    
+    Returns success message or 404 if not found.
+    """
+    try:
+        # Try to delete as a document first
+        deleted = document_store.delete_document(user_id, doc_id)
+        if deleted:
+            return {"message": f"Document {doc_id} deleted successfully", "file_type": "document"}
+        
+        # If not found as document, try as Excel table
+        deleted = data_loader.delete_excel_table(user_id, doc_id)
+        if deleted:
+            return {"message": f"Excel file {doc_id} deleted successfully", "file_type": "excel"}
+        
+        # Not found in either store
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document or Excel file with doc_id '{doc_id}' not found for user '{user_id}'"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document {doc_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -679,7 +789,8 @@ async def root():
             "threads": "GET /api/v1/threads - List conversation threads",
             "messages": "GET /api/v1/threads/{thread_id}/messages - Get thread messages",
             "delete_thread": "DELETE /api/v1/threads/{thread_id} - Delete thread",
-            "documents": "GET /api/v1/documents - List user documents",
+            "documents": "GET /api/v1/documents - List user documents (unified: documents + Excel)",
+            "delete_document": "DELETE /api/v1/documents/{doc_id} - Delete document or Excel file by doc_id",
             "health": "GET /api/v1/health - Health check"
         }
     }
