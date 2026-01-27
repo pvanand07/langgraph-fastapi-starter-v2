@@ -7,7 +7,7 @@ import logging
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from prompt import CONTEXT_INTELLIGENCE_PROMPT
+from prompt import CONTEXT_INTELLIGENCE_PROMPT, ANALYSIS_PROMPT, FORMATTING_GUIDELINES
 
 from config import DEFAULT_MODEL_CONFIG
 from memory_store import get_memory
@@ -39,7 +39,10 @@ You have access to the following tools:
 - create_view: Create persistent views in DuckDB
 - create_visualization: Create visualizations from SQL query results using plotly
 
-To render an artifact on the UI,  include artifact id in the response as <artifact_id="artifact id">
+Use either create_view or execute_python to export data to CSV which can be rendered on the UI as a table.
+To render an artifact on the UI,  include artifact id in the response as <artifact_id="artifact id" type="mime type" title="title">
+note: csv artifacts with a single row supports rendering as KPI cards on the UI.
+
 You also have access to data tables stored in DuckDB. 
 
 When users ask questions about their data:
@@ -52,7 +55,9 @@ When users ask questions about their data:
 
 Be helpful, and accurate in your responses.
 If you are not sure about the answer, say so and ask the user for more information.
-{CONTEXT_INTELLIGENCE_PROMPT}"""
+{CONTEXT_INTELLIGENCE_PROMPT}
+{ANALYSIS_PROMPT}
+{FORMATTING_GUIDELINES}"""
     
     if context:
         base_prompt += f"\n\nCONTEXT:\n{context}"
